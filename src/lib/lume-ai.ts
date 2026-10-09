@@ -158,15 +158,7 @@ export async function chatCompletion(opts: {
       }
       xaiError = `xAI failed: ${lastErr.slice(0, 120)}`;
     }
-    const geminiKey = process.env.GEMINI_API_KEY;
-    if (geminiKey) {
-      try {
-        return await geminiCompletion(geminiKey, opts, controller.signal);
-      } catch (geminiErr) {
-        console.error("[lume-ai] Gemini failed:", geminiErr);
-        if (!lovableKey) throw geminiErr;
-      }
-    }
+
     // Si xAI no está configurada, o falló (clave inválida, sin crédito, error de red...),
     // caemos de verdad al gateway de Lovable en vez de fallar toda la tasación.
     if (lovableKey) {
@@ -245,73 +237,4 @@ export function roundMoney(n: number): number {
   if (n < 1) return Math.round(n * 100) / 100;
   if (n < 100) return Math.round(n * 10) / 10;
   return Math.round(n);
-}
-
-function toGeminiContents(messages: ChatMessage[]) {
-  const system: string[] = [];
-  const contents: Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> = [];
-  for (const m of messages) {
-    const parts: Array<Record<string, unknown>> = [];
-    if (typeof m.content === "string") {
-      parts.push({ text: m.content });
-    } else {
-      for (const p of m.content) {
-        if (p.type === "text" && typeof p.text === "string") {
-          parts.push({ text: p.text });
-        } else if (p.type === "image_url") {
-          const url = (p.image_url as { url?: string } | undefined)?.url ?? "";
-          const match = url.match(/^data:([^;]+);base64,(.+)$/);
-          if (match) parts.push({ inline_data: { mime_type: match[1], data: match[2] } });
-        }
-      }
-    }
-    if (m.role === "system") {
-      for (const p of parts) if (typeof p.text === "string") system.push(p.text);
-    } else {
-      contents.push({ role: m.role === "assistant" ? "model" : "user", parts });
-    }
-  }
-  return { system: system.join("\n\n"), contents };
-}
-
-async function geminiCompletion(
-  apiKey: string,
-  opts: { messages: ChatMessage[]; json?: boolean; search?: boolean },
-  signal: AbortSignal,
-): Promise<ChatResult> {
-  const { system, contents } = toGeminiContents(opts.messages);
-  const body: Record<string, unknown> = { contents };
-  if (opts.json && !opts.search) {
-    body.generationConfig = { responseMimeType: "application/json" };
-  }
-  if (system) body.systemInstruction = { parts: [{ text: system }] };
-  if (opts.search) body.tools = [{ google_search: {} }];
-
-  const res = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify(body),
-      signal,
-    },
-  );
-  if (!res.ok) {
-    const text = await res.text();
-    console.error(`[lume-ai] Gemini error [${res.status}]: ${text.slice(0, 400)}`);
-    throw new Error(`gemini ${res.status}`);
-  }
-  const json = (await res.json()) as {
-    candidates?: Array<{
-      content?: { parts?: Array<{ text?: string }> };
-      groundingMetadata?: { groundingChunks?: Array<{ web?: { uri?: string } }> };
-    }>;
-  };
-  const cand = json.candidates?.[0];
-  const raw = (cand?.content?.parts ?? []).map((p) => p.text ?? "").join("");
-  const citations = (cand?.groundingMetadata?.groundingChunks ?? [])
-    .map((c) => c.web?.uri)
-    .filter((u): u is string => typeof u === "string")
-    .slice(0, 8);
-  return { text: extractJsonText(raw || "{}"), citations };
 }

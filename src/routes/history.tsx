@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowLeft, ArrowUp, Check, ExternalLink, Scale, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Check, ChevronDown, ExternalLink, Scale, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { deleteValuation, getHistory, importHistory, type Valuation } from "@/lib/history";
 import { exportHistoryPdf, extractHistoryJsonFromPdf } from "@/lib/historyPdf";
@@ -368,6 +368,10 @@ function HistoryPage() {
                           <span className="rounded-full border border-accent/30 bg-accent/15 px-2.5 py-1 font-semibold leading-tight text-accent">
                             ${fmt(v.priceUsdMin)}–${fmt(v.priceUsdMax)}
                           </span>
+                          <ChevronDown
+                            aria-hidden="true"
+                            className={`ml-auto h-6 w-6 shrink-0 text-yellow-400 transition-transform duration-300 ${isOpen ? "rotate-180" : ""}`}
+                          />
                         </div>
                         {!isOpen && (
                           <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">

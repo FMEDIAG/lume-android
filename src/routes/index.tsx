@@ -286,7 +286,7 @@ function Index() {
 
               <div className="mt-6 grid grid-cols-3 gap-3">
                 <button
-                  onClick={() => setMacroOpen(true)}
+                 onClick={() => cameraRef.current?.click()}
                   className="glass-crystal group flex flex-col items-center justify-center gap-2 rounded-2xl px-3 py-6 transition hover:scale-[1.02]"
                 >
                   <Camera className="h-7 w-7 text-primary transition group-hover:scale-110" />

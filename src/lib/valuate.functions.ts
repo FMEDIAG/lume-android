@@ -664,7 +664,7 @@ function applyBulkFloor(parsed: unknown): unknown {
 export const valuateItem = createServerFn({ method: "POST" })
   .validator((data: unknown) => InputSchema.parse(data))
   .handler(async ({ data }) => {
-    if (!process.env.XAI_API_KEY && !process.env.LOVABLE_API_KEY && !process.env.GEMINI_API_KEY) {
+    if (!process.env.XAI_API_KEY && !process.env.LOVABLE_API_KEY) {
       console.error("[valuateItem] Missing XAI_API_KEY and LOVABLE_API_KEY");
       setResponseStatus(500);
       throw new Error("Valuation service misconfigured");

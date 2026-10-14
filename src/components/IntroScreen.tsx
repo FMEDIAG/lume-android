@@ -165,7 +165,7 @@ export function IntroScreen({ onStart }: { onStart: (openCamera: boolean) => voi
           <Rocket className="h-4 w-4 transition group-hover:translate-x-0.5" />
         </Button>
 
-        <p className="mt-6 text-center text-[10px] uppercase tracking-[0.15em] text-muted-foreground/70">
+        <p className="mt-6 text-center text-[10px] tracking-[0.15em] text-muted-foreground/70">
           {t.intro.footer}
         </p>
       </div>

@@ -185,6 +185,284 @@ function photoContent(photos: Array<{ dataUrl: string }>, text: string) {
   ];
 }
 
+const CardIdSchema = z.object({
+  isMagic: z.boolean().catch(false),
+  name: z.string().max(200).catch(""),
+  setCode: z.string().max(10).nullish().catch(null),
+  collectorNumber: z.string().max(12).nullish().catch(null),
+  foil: z.boolean().nullish().catch(null),
+  confidence: z.enum(["low", "medium", "high"]).catch("low"),
+});
+type CardId = z.infer<typeof CardIdSchema>;
+
+const SCRYFALL_HEADERS = {
+  "User-Agent": "Lume/1.0 (https://lume-tasa.lovable.app)",
+  Accept: "application/json;q=0.9,*/*;q=0.8",
+};
+
+// Cambio aproximado, solo se usa si Scryfall trae precio en una moneda y no en la otra.
+const EUR_PER_USD_APPROX = 0.86;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function scryfallGet(url: string): Promise<any | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const res = await fetch(url, { headers: SCRYFALL_HEADERS, signal: controller.signal });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normName(n: string): string {
+  return n
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function namesMatch(a: string, b: string): boolean {
+  const x = normName(a);
+  const y = normName(b);
+  return x.length > 0 && y.length > 0 && (x.includes(y) || y.includes(x));
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function priceOf(card: any, foil: boolean): { eur: number | null; usd: number | null } {
+  const p = card?.prices ?? {};
+  const num = (v: unknown): number | null => {
+    const n = Number(v);
+    return v != null && Number.isFinite(n) && n > 0 ? n : null;
+  };
+  const eurN = num(p.eur);
+  const eurF = num(p.eur_foil) ?? num(p.eur_etched);
+  const usdN = num(p.usd);
+  const usdF = num(p.usd_foil) ?? num(p.usd_etched);
+  let eur = foil ? eurF : eurN;
+  let usd = foil ? usdF : usdN;
+  if (eur == null && usd == null) {
+    eur = foil ? eurN : eurF;
+    usd = foil ? usdN : usdF;
+  }
+  return { eur, usd };
+}
+
+function fillBoth(eur: number | null, usd: number | null): { eur: number; usd: number } {
+  if (eur != null && usd != null) return { eur, usd };
+  if (eur != null) return { eur, usd: eur / EUR_PER_USD_APPROX };
+  return { eur: (usd as number) * EUR_PER_USD_APPROX, usd: usd as number };
+}
+
+async function identifyMagicCard(data: z.infer<typeof InputSchema>): Promise<CardId | null> {
+  const system = `You identify trading cards from photos. Do NOT give a price.
+Decide whether the card is a Magic: The Gathering card. Read the printed card name exactly. On modern Magic cards the bottom-left corner shows the collector number (for example 0007 or 359) and the set code (for example FRA) with the language: report them if legible, otherwise null. Set foil to true only if the card visibly has a foil/holographic finish, false if it clearly does not, null if unsure.
+Return ONLY JSON with: isMagic (boolean), name (string), setCode (string or null, lowercase), collectorNumber (string or null, without leading zeros), foil (boolean or null), confidence ("low"|"medium"|"high").`;
+  const user = "Identify this card. User context: " + (data.context || "(none)");
+
+  const { text } = await chatCompletion({
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: photoContent(data.photos, user) },
+    ],
+    json: true,
+    search: false,
+    timeoutMs: 40_000,
+    maxTokens: 500,
+  });
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const raw = parsed as Record<string, unknown>;
+  if (typeof raw.collectorNumber === "number") raw.collectorNumber = String(raw.collectorNumber);
+
+  const id = CardIdSchema.parse(raw);
+  if (!id.isMagic || !id.name.trim()) return null;
+  return id;
+}
+
+async function tryMagicCard(data: z.infer<typeof InputSchema>): Promise<ValuationResult | null> {
+  const id = await identifyMagicCard(data);
+  if (!id) return null;
+
+  const foil = id.foil === true;
+  const setCode = (id.setCode ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const cn = (id.collectorNumber ?? "").trim().replace(/^0+(?=\d)/, "");
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let chosen: any = null;
+  let exact = false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let prints: any[] = [];
+
+  // 1) Edición y número leídos de la carta: búsqueda directa e inequívoca.
+  if (setCode && cn) {
+    const card = await scryfallGet(
+      `https://api.scryfall.com/cards/${encodeURIComponent(setCode)}/${encodeURIComponent(cn)}`,
+    );
+    if (card?.object === "card" && namesMatch(String(card.name ?? ""), id.name)) {
+      chosen = card;
+      exact = true;
+    }
+  }
+
+  // 2) Si no, buscamos por nombre y miramos todas las ediciones existentes.
+  if (!chosen) {
+    const named = await scryfallGet(
+      `https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(id.name)}`,
+    );
+    if (!named || named.object !== "card") return null;
+    if (named.prints_search_uri) {
+      const list = await scryfallGet(String(named.prints_search_uri));
+      if (list && Array.isArray(list.data)) {
+        prints = list.data.filter((c: { games?: string[] }) =>
+          Array.isArray(c.games) ? c.games.includes("paper") : true,
+        );
+      }
+    }
+    if (prints.length === 0) prints = [named];
+
+    if (setCode) {
+      const matches = prints.filter(
+        (c) => c.set === setCode && (!cn || String(c.collector_number) === cn),
+      );
+      if (matches.length === 1) {
+        chosen = matches[0];
+        exact = true;
+      } else if (matches.length > 1) {
+        prints = matches;
+      }
+    }
+  }
+
+  const es = data.lang === "es";
+
+  if (exact && chosen) {
+    const p = priceOf(chosen, foil);
+    if (p.eur == null && p.usd == null) return null;
+    const { eur, usd } = fillBoth(p.eur, p.usd);
+    const setLabel = `${chosen.set_name} (${String(chosen.set).toUpperCase()}) #${chosen.collector_number}`;
+    return ResultSchema.parse({
+      title: `${chosen.name} — ${chosen.set_name} #${chosen.collector_number}`.slice(0, 200),
+      identification: `${chosen.name} — ${setLabel}, ${chosen.rarity}${foil ? ", foil" : ""}`.slice(0, 2000),
+      priceEurMin: roundMoney(eur * 0.85),
+      priceEurMax: roundMoney(eur * 1.15),
+      priceUsdMin: roundMoney(usd * 0.85),
+      priceUsdMax: roundMoney(usd * 1.15),
+      confidence: id.confidence === "low" ? "medium" : "high",
+      notes: es
+        ? `Precio de referencia de mercado (Cardmarket en EUR y TCGplayer en USD, vía Scryfall) para ${setLabel}${foil ? ", foil" : ""}, en estado casi perfecto (NM). Ajusta según el estado real de la carta.`
+        : `Market reference price (Cardmarket in EUR and TCGplayer in USD, via Scryfall) for ${setLabel}${foil ? ", foil" : ""}, in near mint (NM) condition. Adjust for the actual condition of the card.`,
+      sources: ["Scryfall", "Cardmarket (EUR)", "TCGplayer (USD)"],
+    });
+  }
+
+  // Edición no determinada: rango entre la más barata y el tercer cuartil de las ediciones.
+  const eurs: number[] = [];
+  const usds: number[] = [];
+  for (const c of prints) {
+    const p = priceOf(c, foil);
+    if (p.eur != null) eurs.push(p.eur);
+    if (p.usd != null) usds.push(p.usd);
+  }
+  if (eurs.length === 0 && usds.length === 0) return null;
+  eurs.sort((a, b) => a - b);
+  usds.sort((a, b) => a - b);
+  const q = (arr: number[], frac: number): number | null =>
+    arr.length ? arr[Math.min(arr.length - 1, Math.floor((arr.length - 1) * frac))] : null;
+  const low = fillBoth(q(eurs, 0), q(usds, 0));
+  const high = fillBoth(q(eurs, 0.75), q(usds, 0.75));
+  const cardName = String(prints[0]?.name ?? id.name);
+
+  return ResultSchema.parse({
+    title: cardName.slice(0, 200),
+    identification: (es
+      ? `${cardName} — edición no determinada (${prints.length} versiones)`
+      : `${cardName} — edition not determined (${prints.length} versions)`
+    ).slice(0, 2000),
+    priceEurMin: roundMoney(low.eur),
+    priceEurMax: roundMoney(high.eur),
+    priceUsdMin: roundMoney(low.usd),
+    priceUsdMax: roundMoney(high.usd),
+    confidence: prints.length > 3 ? "low" : "medium",
+    notes: es
+      ? `No se pudo fijar la edición exacta. El rango va desde la versión más barata hasta el tercer cuartil de las ${prints.length} versiones existentes (Cardmarket y TCGplayer, vía Scryfall). Indica la edición o el número de colección en el contexto para afinarlo.`
+      : `The exact edition could not be determined. The range goes from the cheapest version up to the third quartile of the ${prints.length} existing versions (Cardmarket and TCGplayer, via Scryfall). Add the edition or collector number in the context to refine it.`,
+    sources: ["Scryfall", "Cardmarket (EUR)", "TCGplayer (USD)"],
+  });
+}
+
+const ItemIdSchema = z.object({
+  summary: z.string().max(1500).catch(""),
+  searchQueries: z.array(z.string().max(120)).max(4).catch([]),
+  missingInfo: z.array(z.string().max(120)).max(5).catch([]),
+});
+type ItemId = z.infer<typeof ItemIdSchema>;
+
+// Primera pasada del flujo general: identifica el objeto sin dar precio, para que la
+// segunda pasada busque ventas reales del objeto exacto en vez de adivinar.
+async function identifyItem(data: z.infer<typeof InputSchema>): Promise<ItemId | null> {
+  const es = data.lang === "es";
+  const system = es
+    ? `Eres un identificador experto de objetos. Mira las fotos e identifica el objeto con la mayor precisión posible. NO des precio.
+Lee todo el texto visible: marcas, etiquetas, números de serie, sellos, firmas, inscripciones y, en embarcaciones, el nombre del casco y la matrícula. Indica fabricante o autor, modelo, época o año, materiales, dimensiones aproximadas y estado aparente. Si hay varios objetos, céntrate en el de mayor valor probable.
+Devuelve SOLO JSON con: summary (identificación detallada en 2-4 frases, distinguiendo lo que se LEE en la foto de lo que DEDUCES), searchQueries (2-3 consultas cortas para buscar ventas reales de este objeto exacto: modelo, referencia, año), missingInfo (hasta 4 datos que NO se ven en la foto y cambiarían mucho el precio, por ejemplo año de fabricación, horas de motor, metros cuadrados, ubicación, número de serie; lista vacía si no falta ninguno).`
+    : `You are an expert item identifier. Look at the photos and identify the item as precisely as possible. Do NOT give a price.
+Read all visible text: brands, labels, serial numbers, hallmarks, signatures, inscriptions and, on boats, the hull name and registration. State maker or author, model, era or year, materials, approximate dimensions and apparent condition. If there are several items, focus on the one with the highest likely value.
+Return ONLY JSON with: summary (detailed identification in 2-4 sentences, separating what you READ in the photo from what you INFER), searchQueries (2-3 short queries to find real sales of this exact item: model, reference, year), missingInfo (up to 4 facts that are NOT visible in the photo and would change the price a lot, for example year of manufacture, engine hours, square metres, location, serial number; empty list if none is missing).`;
+
+  const category =
+    data.category && data.category !== "auto"
+      ? es
+        ? `\nCategoría indicada: ${data.category}`
+        : `\nStated category: ${data.category}`
+      : "";
+  const user =
+    (es ? "Identifica este objeto. Contexto del usuario: " : "Identify this item. User context: ") +
+    (data.context || "(none)") +
+    category;
+
+  const { text } = await chatCompletion({
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: photoContent(data.photos, user) },
+    ],
+    json: true,
+    search: false,
+    timeoutMs: 25_000,
+    maxTokens: 700,
+  });
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const id = ItemIdSchema.parse(parsed);
+  return id.summary.trim() ? id : null;
+}
+
+function withMissingInfo(r: ValuationResult, id: ItemId | null, lang: "es" | "en"): ValuationResult {
+  if (!id || id.missingInfo.length === 0) return r;
+  const extra =
+    lang === "es"
+      ? ` Para afinar la tasación, añade en el contexto: ${id.missingInfo.join(", ")}.`
+      : ` To refine the valuation, add in the context: ${id.missingInfo.join(", ")}.`;
+  return { ...r, notes: (r.notes + extra).slice(0, 4000) };
+}
+
 async function identifyCoin(data: z.infer<typeof InputSchema>): Promise<CoinId> {
   const lang = data.lang;
   const system =
@@ -356,11 +634,11 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
   return ResultSchema.parse({ ...result, ...guarded });
 }
 
-const systemEs = `Eres un tasador experto que consulta bases de datos públicas de todo el mundo (eBay sold listings, Wikipedia, Catawiki, WorthPoint, Heritage Auctions, Chrono24, Discogs, etc.). Analiza las fotos y devuelve una tasación honesta con rangos de precio realistas en EUR y USD. REGLA SOBRE EL CONTEXTO DEL USUARIO: es opcional y solo una pista. La tasación se basa SIEMPRE en las fotos y en lo que encuentres en internet; nunca falles, te bloquees ni devuelvas un error por culpa del contexto. Si el contexto es coherente con las fotos, úsalo para afinar (marca, año, ubicación, m², estado); si es confuso, contradictorio, incompleto o claramente erróneo, ignóralo por completo y tasa solo con las fotos y tus fuentes, sin mencionar el problema en "notes" salvo que sea relevante para el precio. Si no puedes identificar el objeto con seguridad, indícalo y usa confianza "low", y en ese caso NO inventes un precio: usa 0 en los campos de precio. Para cartas coleccionables (Magic: The Gathering, Pokémon, Yu-Gi-Oh, deportes, etc.) IDENTIFICA CON PRECISIÓN la edición/set exacto usando el símbolo de expansión, el número de colección, el año, el idioma, el borde (blanco/negro), foil/no-foil y el estado (NM/LP/MP/HP/DMG). Consulta referencias específicas (Scryfall, MTGGoldfish, TCGPlayer, Cardmarket para Magic; TCGPlayer/PriceCharting para Pokémon) y considera TODAS las ediciones posibles antes de dar el precio. Si identificas con confianza media o alta una carta u objeto coleccionable común de valor muy bajo (bulk), asigna un rango mínimo de mercado real de céntimos (ej. 0.02 - 0.10 EUR/USD) en vez de 0. Indica en "notes" la edición identificada y menciona alternativas si hay duda. Para VEHÍCULOS A MOTOR (categoría vehicles: coches, motocicletas, vehículos históricos, furgonetas, camiones ligeros, etc.) identifica marca, modelo, generación aproximada, motorización, kilometraje aparente y estado visual. Consulta referencias como eBay sold listings, Mobile.de, Autoscout24, Classic.com, Bring a Trailer y Hemmings; ajusta por mercado europeo (EUR) y estadounidense (USD). Para embarcaciones (categoría boats: yates, veleros, lanchas, barcos de pesca, jet skis, neumáticas, etc.) identifica tipo, eslora aproximada, marca/modelo del casco y motor, antigüedad, estado de conservación y equipamiento visible. Consulta referencias como YachtWorld, Boat Trader, Annonces du Bateau, TopBoats y Band of Boats; ten en cuenta que los precios varían mucho según país, temporada y estado. Para INMUEBLES (categoría realestate: pisos, casas, villas, chalets, locales, terrenos, edificios) NO apliques suelos de céntimos ni techos artificiales: estima el valor de mercado real, que puede ser de cientos de miles a decenas de millones de euros. Calcula SIEMPRE el precio como superficie × precio/m² de la microzona, antes de ajustar por estado y singularidad. El contexto del usuario sobre ubicación, m² y tipología prevalece sobre cualquier inferencia visual; no reduzcas la superficie indicada. Distingue estrictamente un apartamento pequeño de una residencia de 3+ dormitorios, dúplex, planta completa o >150 m². Si faltan m², estima un intervalo de superficie coherente y calcula ambos extremos. Para lujo usa comparables de Idealista, Fotocasa, Sotheby's Realty, Christie's Real Estate y Engel & Völkers; no limites el resultado a 1.000.000 € y explica en "notes" superficie, horquilla €/m², primas y cálculo final. Para BONSÁIS (categoría bonsai) identifica especie, estilo (chokkan, moyogi, kengai, forest, etc.), edad aproximada por grosor de tronco y nebari, calidad de la ramificación y estado de salud visible; ten en cuenta si la maceta es de autor (Tokoname, Yixing) y súmala aparte si es apreciable. Consulta Bonsai Empire, viveros y subastas especializadas, y eBay sold listings; los precios van desde 20-30 € en material de partida hasta varios miles en ejemplares de estilo maduro. Para VINO Y LICORES (categoría wine) identifica productor, denominación de origen o región, añada, formato de botella y estado de conservación (nivel de llenado, etiqueta, cápsula, corcho); consulta Wine-Searcher, iDealwine, Vinfolio y casas como Sotheby's/Christie's Wine o Whisky Auctioneer para licores. Para MUEBLES ANTIGUOS (categoría furniture) identifica estilo y época (Isabelino, Luis XV, Art Déco, medio siglo, etc.), material, posibles marcas de ebanista o taller, y estado/restauraciones; consulta Catawiki, 1stDibs, Invaluable y los departamentos de mobiliario de Christie's/Sotheby's. Para MILITARIA (categoría militaria) identifica conflicto/época, país, unidad y tipo de pieza (medalla, insignia, uniforme, documento), y sé explícito si parece una reproducción moderna en vez de una pieza original, ya que el precio varía drásticamente; consulta Hermann Historica, Bonhams Arms & Militaria y eBay sold listings. Para BOLSOS Y COMPLEMENTOS DE LUJO (categoría luxury bags) identifica marca, modelo, línea, materiales, herrajes y posibles indicios de autenticidad (calidad de costuras, sellado, número de serie visible); consulta Vestiaire Collective, The RealReal, Fashionphile, Rebag y los departamentos de bolsos de Christie's/Sotheby's. Para MINERALES Y ROCAS (categoría minerals) identifica especie mineral, hábito cristalino, color y transparencia, procedencia probable del yacimiento y tamaño estimado; consulta Mindat.org, MineralAuctions, eBay sold listings y Catawiki. Para GEMAS Y PIEDRAS PRECIOSAS SUELTAS (categoría gemstones) identifica tipo de gema, corte, color, transparencia y posible origen; el peso en quilates es determinante y si no es visible indícalo como limitación; consulta Opal Auctions (para ópalos), GemVal, GIA (Gemological Institute of America), eBay sold listings y Catawiki. Para JOYERÍA (categoría jewelry) busca SIEMPRE el contraste/sello de ley grabado (750/18K, 585/14K, 417/10K, 375/9K = oro macizo; 925/plata de ley; 950/platino) frente a marcas de CHAPADO/BAÑO (GP, "gold filled", "gold plated", "chapado", "baño de oro", "plaqué", "vermeil"): son mundos de valor completamente distintos. Si es oro/plata MACIZO, calcula el valor de fundición con la cotización real proporcionada (peso estimado en gramos × ley × precio del metal) y súmale una prima si hay marca reconocida, diseño de autor, gemas engastadas o antigüedad — la fundición es el SUELO, no el precio final si hay valor añadido. Si es CHAPADO/DE BAÑO, el metal precioso es una capa mínima: NO calcules fundición sobre el peso total, tasa la pieza como bisutería fina según marca, diseño y estado. Ante duda razonable entre macizo y chapado, indícalo explícitamente en "notes" y usa confidence "low" o "medium" en vez de asumir macizo.
+const systemEs = `Eres un tasador experto que consulta bases de datos públicas de todo el mundo (eBay sold listings, Wikipedia, Catawiki, WorthPoint, Heritage Auctions, Chrono24, Discogs, etc.). Analiza las fotos y devuelve una tasación honesta con rangos de precio realistas en EUR y USD. REGLA SOBRE EL CONTEXTO DEL USUARIO: es opcional y solo una pista. La tasación se basa SIEMPRE en las fotos y en lo que encuentres en internet; nunca falles, te bloquees ni devuelvas un error por culpa del contexto. Si el contexto es coherente con las fotos, úsalo para afinar (marca, año, ubicación, m², estado); si es confuso, contradictorio, incompleto o claramente erróneo, ignóralo por completo y tasa solo con las fotos y tus fuentes, sin mencionar el problema en "notes" salvo que sea relevante para el precio. Si no puedes identificar el objeto con seguridad, da igualmente tu mejor estimación: indica la duda en "notes", usa confianza "low" y devuelve SIEMPRE un rango de precio estimado y realista (aunque sea amplio) basado en lo que se ve y en objetos parecidos; el usuario puede añadir contexto opcional para afinarlo. No devuelvas precios en 0 por falta de certeza. Para cartas coleccionables (Magic: The Gathering, Pokémon, Yu-Gi-Oh, deportes, etc.) IDENTIFICA CON PRECISIÓN la edición/set exacto usando el símbolo de expansión, el número de colección, el año, el idioma, el borde (blanco/negro), foil/no-foil y el estado (NM/LP/MP/HP/DMG). Consulta referencias específicas (Scryfall, MTGGoldfish, TCGPlayer, Cardmarket para Magic; TCGPlayer/PriceCharting para Pokémon) y considera TODAS las ediciones posibles antes de dar el precio. Usa el rango de céntimos (ej. 0.02 - 0.10 EUR/USD) SOLO si estás seguro de que la carta u objeto coleccionable es común y de valor muy bajo (bulk). Si la carta es de una edición reciente, o no la reconoces con certeza, NO uses ese suelo: busca su precio actual en Scryfall o Cardmarket y usa el precio de mercado de la edición exacta, no el de la más barata. Indica en "notes" la edición identificada y menciona alternativas si hay duda. Para VEHÍCULOS A MOTOR (categoría vehicles: coches, motocicletas, vehículos históricos, furgonetas, camiones ligeros, etc.) identifica marca, modelo, generación aproximada, motorización, kilometraje aparente y estado visual. Consulta referencias como eBay sold listings, Mobile.de, Autoscout24, Classic.com, Bring a Trailer y Hemmings; ajusta por mercado europeo (EUR) y estadounidense (USD). Para embarcaciones (categoría boats: yates, megayates, veleros, lanchas, barcos de pesca, jet skis, neumáticas, etc.) NO apliques suelos ni techos artificiales: un yate de 40-60 m vale decenas de millones de euros y uno de más de 100 m, cientos de millones. Identifica PRIMERO astillero, modelo y serie exactos (lee el nombre del casco, la matrícula y las inscripciones), eslora (cuidado: no confundas pies con metros), año de construcción o de la última gran refit, motorización y horas de motor, y equipamiento visible. Si es un modelo de serie conocido, busca el precio real de unidades del MISMO modelo y año (YachtWorld, Boat International, SuperYacht Times, YachtBuyer, Burgess, Camper & Nicholsons, Boat Trader, Annonces du Bateau) y distingue ventas cerradas de precios pedidos. Si el precio es "bajo consulta" (POA), NO lo inventes: estima por comparables de eslora, edad y astillero similares y usa confianza "medium" o "low". En un yate nuevo o casi nuevo parte del precio de catálogo o de construcción; en uno usado aplica la depreciación real de su edad. Muestra en "notes" el modelo identificado, la eslora usada, 2-3 comparables con su precio y el cálculo. El contexto del usuario sobre astillero, modelo, eslora, año y horas de motor prevalece sobre lo que deduzcas de la foto. Para INSTRUMENTOS MUSICALES (categoría music instrument: guitarras, bajos, violines, violas, chelos, pianos, vientos, baterías, sintetizadores, amplificadores) identifica PRIMERO marca, modelo, año y país de fabricación (usa el número de serie, la etiqueta interior, la pala del mástil y las inscripciones), el acabado y si es original o ha sido reparado, retocado o con piezas cambiadas. En instrumentos de gama alta o antiguos pesan más el origen, el año y la originalidad que el modelo: un mismo modelo puede valer varias veces más según la época. Busca el precio real de ventas de unidades del MISMO modelo y año (Reverb, Thomann, eBay sold listings, Tarisio Cozio para instrumentos de cuerda frotada, y Christie's, Sotheby's o Bonhams para piezas excepcionales) y distingue el precio pedido del vendido. En violines, violas, chelos y arcos de autor, sin certificado de autenticidad trátalos como instrumento de taller o "de estilo" y baja la confianza. Muestra en "notes" el modelo identificado, el año estimado y 2-3 comparables con su precio. Para INMUEBLES (categoría realestate: pisos, casas, villas, chalets, locales, terrenos, edificios) NO apliques suelos de céntimos ni techos artificiales: estima el valor de mercado real, que puede ser de cientos de miles a decenas de millones de euros. Calcula SIEMPRE el precio como superficie × precio/m² de la microzona, antes de ajustar por estado y singularidad. El contexto del usuario sobre ubicación, m² y tipología prevalece sobre cualquier inferencia visual; no reduzcas la superficie indicada. Distingue estrictamente un apartamento pequeño de una residencia de 3+ dormitorios, dúplex, planta completa o >150 m². Si faltan m², estima un intervalo de superficie coherente y calcula ambos extremos. Para lujo usa comparables de Idealista, Fotocasa, Sotheby's Realty, Christie's Real Estate y Engel & Völkers; no limites el resultado a 1.000.000 € y explica en "notes" superficie, horquilla €/m², primas y cálculo final. Para BONSÁIS (categoría bonsai) identifica especie, estilo (chokkan, moyogi, kengai, forest, etc.), edad aproximada por grosor de tronco y nebari, calidad de la ramificación y estado de salud visible; ten en cuenta si la maceta es de autor (Tokoname, Yixing) y súmala aparte si es apreciable. Consulta Bonsai Empire, viveros y subastas especializadas, y eBay sold listings; los precios van desde 20-30 € en material de partida hasta varios miles en ejemplares de estilo maduro. Para VINO Y LICORES (categoría wine) identifica productor, denominación de origen o región, añada, formato de botella y estado de conservación (nivel de llenado, etiqueta, cápsula, corcho); consulta Wine-Searcher, iDealwine, Vinfolio y casas como Sotheby's/Christie's Wine o Whisky Auctioneer para licores. Para MUEBLES ANTIGUOS (categoría furniture) identifica estilo y época (Isabelino, Luis XV, Art Déco, medio siglo, etc.), material, posibles marcas de ebanista o taller, y estado/restauraciones; consulta Catawiki, 1stDibs, Invaluable y los departamentos de mobiliario de Christie's/Sotheby's. Para MILITARIA (categoría militaria) identifica conflicto/época, país, unidad y tipo de pieza (medalla, insignia, uniforme, documento), y sé explícito si parece una reproducción moderna en vez de una pieza original, ya que el precio varía drásticamente; consulta Hermann Historica, Bonhams Arms & Militaria y eBay sold listings. Para BOLSOS Y COMPLEMENTOS DE LUJO (categoría luxury bags) identifica marca, modelo, línea, materiales, herrajes y posibles indicios de autenticidad (calidad de costuras, sellado, número de serie visible); consulta Vestiaire Collective, The RealReal, Fashionphile, Rebag y los departamentos de bolsos de Christie's/Sotheby's. Para MINERALES Y ROCAS (categoría minerals) identifica especie mineral, hábito cristalino, color y transparencia, procedencia probable del yacimiento y tamaño estimado; consulta Mindat.org, MineralAuctions, eBay sold listings y Catawiki. Para GEMAS Y PIEDRAS PRECIOSAS SUELTAS (categoría gemstones) identifica tipo de gema, corte, color, transparencia y posible origen; el peso en quilates es determinante y si no es visible indícalo como limitación; consulta Opal Auctions (para ópalos), GemVal, GIA (Gemological Institute of America), eBay sold listings y Catawiki. Para JOYERÍA (categoría jewelry) busca SIEMPRE el contraste/sello de ley grabado (750/18K, 585/14K, 417/10K, 375/9K = oro macizo; 925/plata de ley; 950/platino) frente a marcas de CHAPADO/BAÑO (GP, "gold filled", "gold plated", "chapado", "baño de oro", "plaqué", "vermeil"): son mundos de valor completamente distintos. Si es oro/plata MACIZO, calcula el valor de fundición con la cotización real proporcionada (peso estimado en gramos × ley × precio del metal) y súmale una prima si hay marca reconocida, diseño de autor, gemas engastadas o antigüedad — la fundición es el SUELO, no el precio final si hay valor añadido. Si es CHAPADO/DE BAÑO, el metal precioso es una capa mínima: NO calcules fundición sobre el peso total, tasa la pieza como bisutería fina según marca, diseño y estado. Ante duda razonable entre macizo y chapado, indícalo explícitamente en "notes" y usa confidence "low" o "medium" en vez de asumir macizo.
 
 PAÍS VASCO — mercado de alto precio: no uses medias nacionales ni provinciales para una microzona prime. Si el contexto identifica estas zonas, usa como referencia orientativa: Neguri y primera línea de Getxo 7.500-10.000 €/m² (objetivo base de lujo 8.000 €/m²); Las Arenas/Areeta y Algorta prime 6.000-8.500 €/m²; Bilbao Abandoibarra 6.500-9.000 €/m², Ensanche/Abando e Indautxu prime 5.500-8.000 €/m²; San Sebastián Centro, Área Romántica, Miraconcha y Ondarreta 8.000-12.000 €/m², con producto excepcional por encima; Zarautz y Hondarribia prime 6.000-9.000 €/m²; Vitoria centro prime 4.000-6.000 €/m². Para municipios o barrios no listados elige comparables de la microzona, no traslades automáticamente los precios prime. Añade 15-40 % por vistas al mar, terraza, ático, parcela, edificio singular, gran superficie o reforma integral de lujo. No apliques descuentos genéricos después de usar un precio/m² ya ajustado al estado. NO redondees el precio por m²: exprésalo con el valor exacto que hayas aplicado (por ejemplo, 8.125 €/m², no 8.000 €/m²) y usa ese valor exacto en la multiplicación por la superficie. Ejemplo vinculante: 200 m² de lujo en Neguri a 8.000 €/m² parten de 1.600.000 €, antes de primas; nunca deben terminar por debajo por una suposición visual contradictoria. Para otras zonas prime: Barrio de Salamanca/Chamberí 7.000-12.000 €/m², La Moraleja/Puerta de Hierro 5.500-9.000 €/m², Pedralbes/Sarrià/Eixample Dreta 6.000-10.000 €/m², Marbella Milla de Oro/Puerto Banús 6.000-12.000 €/m² e Ibiza/Mallorca prime 7.000-12.000 €/m². Si no hay acceso a anuncios en vivo, presenta las referencias como orientativas, no como consultas realizadas. Responde SIEMPRE en español.`;
 
-const systemEn = `You are an expert appraiser who consults public databases worldwide (eBay sold listings, Wikipedia, Catawiki, WorthPoint, Heritage Auctions, Chrono24, Discogs, etc.). Analyze the photos and return an honest valuation with realistic EUR and USD ranges. RULE ABOUT USER CONTEXT: it is optional and only a hint. The valuation is ALWAYS based on the photos and what you find online; never fail, get blocked, or return an error because of the context. If the context is consistent with the photos, use it to refine (brand, year, location, area, condition); if it is confusing, contradictory, incomplete or clearly wrong, ignore it entirely and appraise from the photos and your sources alone, without mentioning the issue in "notes" unless it matters for the price. If identification is uncertain, use "low" confidence and zero prices rather than inventing a value. For collectible cards, precisely identify every possible edition using expansion symbol, collector number, year, language, border, foil status and condition, consulting Scryfall, MTGGoldfish, TCGPlayer, Cardmarket or PriceCharting as appropriate. For MOTOR VEHICLES (category vehicles: cars, motorcycles, historic vehicles, vans, light trucks, etc.) identify make, model, approximate generation, engine, apparent mileage and visual condition. Reference eBay sold listings, Mobile.de, Autoscout24, Classic.com, Bring a Trailer and Hemmings; adjust for European (EUR) and US (USD) markets. For WATERCRAFT (category boats: yachts, sailboats, motorboats, fishing boats, jet skis, RIBs, etc.) identify type, approximate length, hull and engine make/model, age, condition and visible equipment. Reference YachtWorld, Boat Trader, Annonces du Bateau, TopBoats and Band of Boats; prices vary greatly by country, season and condition. For REAL ESTATE, never apply artificial ceilings: ALWAYS calculate area × the micro-location's price per m² first, then adjust for condition and uniqueness. User-provided location, area and property type override visual guesses; never reduce a stated area. If area is absent, use a coherent area interval and calculate both endpoints. For luxury property cite indicative comparables from Idealista, Fotocasa, Sotheby's Realty, Christie's Real Estate and Engel & Völkers, do not cap at EUR 1,000,000, and show area, EUR/m² range, premiums and final calculation in notes. For BONSAI (category bonsai) identify species, style (chokkan, moyogi, kengai, forest, etc.), approximate age from trunk girth and nebari, ramification quality and visible health; note if the pot is by a recognised potter (Tokoname, Yixing) and value it separately if significant. Reference Bonsai Empire, specialised nurseries/auctions and eBay sold listings; prices range from EUR 20-30 for starter material to several thousand for mature styled specimens. For WINE & SPIRITS (category wine) identify producer, appellation/region, vintage, bottle format and condition (fill level, label, capsule, cork); reference Wine-Searcher, iDealwine, Vinfolio and auction houses such as Sotheby's/Christie's Wine or Whisky Auctioneer for spirits. For ANTIQUE FURNITURE (category furniture) identify style and period (e.g. Louis XV, Art Deco, mid-century), material, possible maker/workshop marks, and condition/restorations; reference Catawiki, 1stDibs, Invaluable and Christie's/Sotheby's furniture departments. For MILITARIA (category militaria) identify conflict/era, country, unit and item type (medal, insignia, uniform, document), and explicitly flag if it looks like a modern reproduction rather than an original piece, since price varies drastically; reference specialised houses like Hermann Historica, Bonhams Arms & Militaria and eBay sold listings. For LUXURY BAGS & ACCESSORIES (category luxury bags) identify brand, model, line, materials, hardware and possible authenticity cues (stitching quality, stamping, visible serial/date code); reference Vestiaire Collective, The RealReal, Fashionphile, Rebag and Christie's/Sotheby's handbag departments. For MINERALS & ROCKS (category minerals) identify mineral species, crystal habit, colour and transparency, likely locality, and estimated size; reference Mindat.org, MineralAuctions, eBay sold listings and Catawiki. For LOOSE GEMSTONES (category gemstones) identify gem type, cut, colour, transparency and likely origin; carat weight is decisive, and if not visible flag it as a limitation; reference Opal Auctions (for opals), GemVal, GIA (Gemological Institute of America), eBay sold listings and Catawiki. For JEWELLERY (category jewelry) ALWAYS look for the engraved hallmark/stamp (750/18K, 585/14K, 417/10K, 375/9K = solid gold; 925 = sterling silver; 950 = platinum) versus PLATED/FILLED marks (GP, "gold filled", "gold plated", "chapado", "vermeil"): these are entirely different value worlds. If SOLID gold/silver, compute melt value using the real spot price provided (estimated weight in grams × fineness × metal price) and add a premium for a recognised maker, designer piece, set gemstones or age — melt is the FLOOR, not the final price when there is added value. If PLATED/FILLED, the precious metal is a thin layer: do NOT compute melt over the total weight, price it as fine costume jewellery based on brand, design and condition. When there is reasonable doubt between solid and plated, say so explicitly in "notes" and use "low" or "medium" confidence rather than assuming solid.
+const systemEn = `You are an expert appraiser who consults public databases worldwide (eBay sold listings, Wikipedia, Catawiki, WorthPoint, Heritage Auctions, Chrono24, Discogs, etc.). Analyze the photos and return an honest valuation with realistic EUR and USD ranges. RULE ABOUT USER CONTEXT: it is optional and only a hint. The valuation is ALWAYS based on the photos and what you find online; never fail, get blocked, or return an error because of the context. If the context is consistent with the photos, use it to refine (brand, year, location, area, condition); if it is confusing, contradictory, incomplete or clearly wrong, ignore it entirely and appraise from the photos and your sources alone, without mentioning the issue in "notes" unless it matters for the price. If identification is uncertain, still give your best estimate: mention the doubt in "notes", use "low" confidence and ALWAYS return a realistic estimated price range (even if wide) based on what is visible and comparable items; the user may add optional context to refine it. Do not return zero prices just because of uncertainty. For collectible cards, precisely identify every possible edition using expansion symbol, collector number, year, language, border, foil status and condition, consulting Scryfall, MTGGoldfish, TCGPlayer, Cardmarket or PriceCharting as appropriate. Only use a cents-level price (e.g. 0.02 - 0.10 EUR/USD) when you are sure the card is a common bulk card; if the card is from a recent set or you do not recognise it, look up its current price on Scryfall or Cardmarket for the exact edition instead of defaulting to a low price. For MOTOR VEHICLES (category vehicles: cars, motorcycles, historic vehicles, vans, light trucks, etc.) identify make, model, approximate generation, engine, apparent mileage and visual condition. Reference eBay sold listings, Mobile.de, Autoscout24, Classic.com, Bring a Trailer and Hemmings; adjust for European (EUR) and US (USD) markets. For WATERCRAFT (category boats: yachts, megayachts, sailboats, motorboats, fishing boats, jet skis, RIBs, etc.) never apply artificial floors or ceilings: a 40-60 m yacht is worth tens of millions of euros and one over 100 m hundreds of millions. FIRST identify the exact builder, model and series (read the hull name, registration and inscriptions), length (careful: do not confuse feet with metres), year of build or last major refit, engines and engine hours, and visible equipment. If it is a known series model, look up the real price of units of the SAME model and year (YachtWorld, Boat International, SuperYacht Times, YachtBuyer, Burgess, Camper & Nicholsons, Boat Trader, Annonces du Bateau) and distinguish closed sales from asking prices. If the price is "on application" (POA), do NOT invent it: estimate from comparables of similar length, age and builder and use "medium" or "low" confidence. For a new or nearly new yacht start from the list or build price; for a used one apply real depreciation for its age. Show in "notes" the identified model, the length used, 2-3 comparables with their price and the calculation. User-provided builder, model, length, year and engine hours override what you infer from the photo. For MUSICAL INSTRUMENTS (category music instrument: guitars, basses, violins, violas, cellos, pianos, wind instruments, drums, synthesizers, amplifiers) FIRST identify the make, model, year and country of manufacture (use the serial number, the inside label, the headstock and any inscriptions), the finish, and whether it is original or has been repaired, refinished or had parts replaced. On high-end or vintage instruments, origin, year and originality matter more than the model: the same model can be worth several times more depending on the era. Look up real sale prices of units of the SAME model and year (Reverb, Thomann, eBay sold listings, Tarisio Cozio for bowed string instruments, and Christie's, Sotheby's or Bonhams for exceptional pieces) and distinguish asking prices from sold prices. For violins, violas, cellos and bows attributed to a maker, without a certificate of authenticity treat them as workshop or "in the style of" instruments and lower the confidence. Show in "notes" the identified model, the estimated year and 2-3 comparables with their price. For REAL ESTATE, never apply artificial ceilings: ALWAYS calculate area × the micro-location's price per m² first, then adjust for condition and uniqueness. User-provided location, area and property type override visual guesses; never reduce a stated area. If area is absent, use a coherent area interval and calculate both endpoints. For luxury property cite indicative comparables from Idealista, Fotocasa, Sotheby's Realty, Christie's Real Estate and Engel & Völkers, do not cap at EUR 1,000,000, and show area, EUR/m² range, premiums and final calculation in notes. For BONSAI (category bonsai) identify species, style (chokkan, moyogi, kengai, forest, etc.), approximate age from trunk girth and nebari, ramification quality and visible health; note if the pot is by a recognised potter (Tokoname, Yixing) and value it separately if significant. Reference Bonsai Empire, specialised nurseries/auctions and eBay sold listings; prices range from EUR 20-30 for starter material to several thousand for mature styled specimens. For WINE & SPIRITS (category wine) identify producer, appellation/region, vintage, bottle format and condition (fill level, label, capsule, cork); reference Wine-Searcher, iDealwine, Vinfolio and auction houses such as Sotheby's/Christie's Wine or Whisky Auctioneer for spirits. For ANTIQUE FURNITURE (category furniture) identify style and period (e.g. Louis XV, Art Deco, mid-century), material, possible maker/workshop marks, and condition/restorations; reference Catawiki, 1stDibs, Invaluable and Christie's/Sotheby's furniture departments. For MILITARIA (category militaria) identify conflict/era, country, unit and item type (medal, insignia, uniform, document), and explicitly flag if it looks like a modern reproduction rather than an original piece, since price varies drastically; reference specialised houses like Hermann Historica, Bonhams Arms & Militaria and eBay sold listings. For LUXURY BAGS & ACCESSORIES (category luxury bags) identify brand, model, line, materials, hardware and possible authenticity cues (stitching quality, stamping, visible serial/date code); reference Vestiaire Collective, The RealReal, Fashionphile, Rebag and Christie's/Sotheby's handbag departments. For MINERALS & ROCKS (category minerals) identify mineral species, crystal habit, colour and transparency, likely locality, and estimated size; reference Mindat.org, MineralAuctions, eBay sold listings and Catawiki. For LOOSE GEMSTONES (category gemstones) identify gem type, cut, colour, transparency and likely origin; carat weight is decisive, and if not visible flag it as a limitation; reference Opal Auctions (for opals), GemVal, GIA (Gemological Institute of America), eBay sold listings and Catawiki. For JEWELLERY (category jewelry) ALWAYS look for the engraved hallmark/stamp (750/18K, 585/14K, 417/10K, 375/9K = solid gold; 925 = sterling silver; 950 = platinum) versus PLATED/FILLED marks (GP, "gold filled", "gold plated", "chapado", "vermeil"): these are entirely different value worlds. If SOLID gold/silver, compute melt value using the real spot price provided (estimated weight in grams × fineness × metal price) and add a premium for a recognised maker, designer piece, set gemstones or age — melt is the FLOOR, not the final price when there is added value. If PLATED/FILLED, the precious metal is a thin layer: do NOT compute melt over the total weight, price it as fine costume jewellery based on brand, design and condition. When there is reasonable doubt between solid and plated, say so explicitly in "notes" and use "low" or "medium" confidence rather than assuming solid.
 
 BASQUE COUNTRY is a high-price market: never substitute national or province-wide averages for a prime micro-location. Indicative ranges when the user's context identifies them: Neguri and Getxo seafront 7,500-10,000 EUR/m² (8,000 EUR/m² luxury baseline); Las Arenas/Areeta and prime Algorta 6,000-8,500; Bilbao Abandoibarra 6,500-9,000, prime Ensanche/Abando and Indautxu 5,500-8,000; San Sebastián Centro, Romantic Area, Miraconcha and Ondarreta 8,000-12,000, with exceptional stock above that; prime Zarautz and Hondarribia 6,000-9,000; prime central Vitoria 4,000-6,000. For unlisted districts use their own micro-location comparables rather than automatically applying prime prices. Add 15-40% for sea views, terrace, penthouse, land, landmark building, large floor area or full luxury renovation. Do not apply a generic discount after choosing an EUR/m² figure already adjusted for condition. DO NOT round the price per m²: state the exact value you apply (for example, 8,125 EUR/m², not 8,000 EUR/m²) and use that exact value when multiplying by the area. Binding example: a 200 m² luxury residence in Neguri at 8,000 EUR/m² starts at EUR 1,600,000 before premiums and must not end below that due to a contradictory visual guess. If live listings are unavailable, clearly label sources as indicative references rather than live queries. Always answer in English.`;
 
@@ -410,9 +688,26 @@ export const valuateItem = createServerFn({ method: "POST" })
 
     try {
       if (isCoinValuation(data.category, data.context)) {
-        const spots = await getMetalSpots();
-        const id = await identifyCoin(data);
-        return await priceCoin(data, id, spots);
+        let lastCoinErr: unknown = null;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            const spots = await getMetalSpots();
+            const id = await identifyCoin(data);
+            return await priceCoin(data, id, spots);
+          } catch (coinErr) {
+            lastCoinErr = coinErr;
+          }
+        }
+        throw lastCoinErr;
+      }
+
+      if (data.category === "cards" || /\b(magic|mtg)\b/i.test(data.context)) {
+        try {
+          const card = await tryMagicCard(data);
+          if (card) return card;
+        } catch (cardErr) {
+          console.error("[valuateItem] Magic card lookup failed, using general flow:", cardErr);
+        }
       }
 
       const categoryLine =
@@ -442,6 +737,20 @@ export const valuateItem = createServerFn({ method: "POST" })
         }
       }
 
+      let itemId: ItemId | null = null;
+      try {
+        itemId = await identifyItem(data);
+      } catch (idErr) {
+        console.error("[valuateItem] identification pass failed, continuing without it:", idErr);
+      }
+      const queriesTxt = itemId && itemId.searchQueries.length ? itemId.searchQueries.join(" | ") : "";
+      const idLine =
+        itemId && itemId.summary
+          ? data.lang === "es"
+            ? `\nIdentificación previa a partir de las fotos (verifícala y corrígela si al buscar ves que es otro objeto): ${itemId.summary}${queriesTxt ? `\nBúsquedas sugeridas de ventas reales: ${queriesTxt}` : ""}\nBasa el precio en ventas reales cerradas (no solo en anuncios) de este objeto exacto.`
+            : `\nPrior identification from the photos (verify it and correct it if your searches show it is a different item): ${itemId.summary}${queriesTxt ? `\nSuggested searches for real sales: ${queriesTxt}` : ""}\nBase the price on real closed sales (not only asking prices) of this exact item.`
+          : "";
+
       const userPrompt =
         (data.lang === "es"
           ? "Analiza este objeto y devuelve JSON con los campos: title (nombre corto), identification (descripción detallada: tipo, marca/autor probable, época, materiales, estado aparente), priceEurMin, priceEurMax, priceUsdMin, priceUsdMax (números decimales en euros y dólares, ej: 0.05 y 0.10), confidence (low|medium|high), notes (razonamiento y factores que afectan el precio; si las bases de datos mencionadas son solo referencias orientativas y no consultas en vivo, acláralo aquí), sources (array con las bases públicas consultadas conceptualmente, ej: eBay sold listings, Wikipedia, Catawiki...).\n\nContexto del usuario: "
@@ -449,45 +758,79 @@ export const valuateItem = createServerFn({ method: "POST" })
         (data.context || "(none)") +
         categoryLine +
         conditionLine +
-        metalSpotLine;
+        metalSpotLine +
+        idLine;
 
-      const { text } = await chatCompletion({
-        messages: [
-          { role: "system", content: data.lang === "es" ? systemEs : systemEn },
-          { role: "user", content: photoContent(data.photos, userPrompt) },
-        ],
-        json: true,
-        search: true,
-        timeoutMs: 60_000,
-        maxTokens: 1800,
-      });
+      const rangeLineEs =
+        "\n\nIMPORTANTE: da SIEMPRE un rango de precio estimado y realista (aunque sea amplio) y usa confianza \"low\" si tienes dudas. No devuelvas precios en 0 y responde solo con el JSON pedido.";
+      const rangeLineEn =
+        "\n\nIMPORTANT: ALWAYS give a realistic estimated price range (even if wide) and use \"low\" confidence if unsure. Do not return zero prices and reply only with the requested JSON.";
 
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        setResponseStatus(502);
-        throw new Error("Model did not return valid JSON");
+      let forceRange = false;
+      let zeroFallback: ValuationResult | null = null;
+      let lastErr: unknown = null;
+
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const { text } = await chatCompletion({
+            messages: [
+              { role: "system", content: data.lang === "es" ? systemEs : systemEn },
+              {
+                role: "user",
+                content: photoContent(
+                  data.photos,
+                  userPrompt + (forceRange ? (data.lang === "es" ? rangeLineEs : rangeLineEn) : ""),
+                ),
+              },
+            ],
+            json: true,
+            search: true,
+            timeoutMs: attempt === 1 ? 60_000 : 40_000,
+            maxTokens: 1800,
+          });
+
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            throw new Error("Model did not return valid JSON");
+          }
+
+          parsed = applyBulkFloor(parsed);
+          const result = ResultSchema.safeParse(parsed);
+          if (!result.success) {
+            console.error(
+              "[valuateItem] Model output failed schema validation:",
+              result.error.flatten(),
+            );
+            throw new Error("Valuation service returned an unexpected response");
+          }
+
+          const r = result.data;
+          const allZero = !(r.priceEurMax > 0) && !(r.priceUsdMax > 0);
+          if (allZero && attempt === 1) {
+            // Sin precio: lo intentamos de nuevo pidiendo un rango estimado.
+            zeroFallback = r;
+            forceRange = true;
+            continue;
+          }
+          return withMissingInfo(r, itemId, data.lang);
+        } catch (attemptErr) {
+          lastErr = attemptErr;
+          if (attempt === 2 && zeroFallback) return withMissingInfo(zeroFallback, itemId, data.lang);
+        }
       }
-
-      parsed = applyBulkFloor(parsed);
-      const result = ResultSchema.safeParse(parsed);
-      if (!result.success) {
-        console.error(
-          "[valuateItem] Model output failed schema validation:",
-          result.error.flatten(),
-        );
-        setResponseStatus(502);
-        throw new Error("Valuation service returned an unexpected response");
-      }
-      return result.data;
+      throw lastErr;
     } catch (err) {
       const isAbort = err instanceof Error && err.name === "AbortError";
       if (isAbort) {
         setResponseStatus(504);
         throw new Error("Valuation service timed out");
       }
-      if (err instanceof Error && err.message.startsWith("Valuation")) throw err;
+      if (err instanceof Error && err.message.startsWith("Valuation")) {
+        setResponseStatus(502);
+        throw err;
+      }
       console.error("[valuateItem] failed:", err);
       setResponseStatus(502);
       throw new Error("Valuation service unavailable");

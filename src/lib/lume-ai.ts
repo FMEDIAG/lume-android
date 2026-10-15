@@ -303,7 +303,19 @@ async function geminiCompletion(
   if (!res.ok) {
     const text = await res.text();
     console.error(`[lume-ai] Gemini error [${res.status}]: ${text.slice(0, 400)}`);
-    throw new Error(`gemini ${res.status}`);
+    // Motivo que da Google (sin datos sensibles): estado y razón, para poder diagnosticar.
+    let reason = "";
+    try {
+      const j = JSON.parse(text) as {
+        error?: { status?: string; message?: string; details?: Array<{ reason?: string }> };
+      };
+      const detail = j.error?.details?.find((d) => d.reason)?.reason;
+      reason = [j.error?.status, detail].filter(Boolean).join(" ");
+      if (!reason && j.error?.message) reason = j.error.message.slice(0, 80);
+    } catch {
+      /* respuesta que no es JSON */
+    }
+    throw new Error(reason ? `gemini ${res.status} ${reason}` : `gemini ${res.status}`);
   }
   const json = (await res.json()) as {
     candidates?: Array<{

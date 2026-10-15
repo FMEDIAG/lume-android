@@ -189,7 +189,7 @@ function Index() {
       setResult({ ...r, thumbnail: photos[0].dataUrl });
     } catch (e) {
       console.error(e);
-      setError(t.error);
+      setError(t.error + " [" + (e instanceof Error ? e.message : String(e)) + "]");
     } finally {
       setLoading(false);
     }

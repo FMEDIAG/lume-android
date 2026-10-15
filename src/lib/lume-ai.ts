@@ -158,12 +158,14 @@ export async function chatCompletion(opts: {
       }
       xaiError = `xAI failed: ${lastErr.slice(0, 120)}`;
     }
+    let geminiError: string | null = null;
     const geminiKey = process.env.GEMINI_API_KEY;
     if (geminiKey) {
       try {
         return await geminiCompletion(geminiKey, opts, controller.signal);
       } catch (geminiErr) {
         console.error("[lume-ai] Gemini failed:", geminiErr);
+        geminiError = geminiErr instanceof Error ? geminiErr.message : String(geminiErr);
         if (!lovableKey) throw geminiErr;
       }
     }
@@ -186,7 +188,9 @@ export async function chatCompletion(opts: {
       if (!res.ok) {
         const text = await res.text();
         console.error(`[lume-ai] Lovable error [${res.status}]: ${text.slice(0, 400)}`);
-        throw new Error(xaiError ? `${xaiError}; gateway ${res.status}` : `gateway ${res.status}`);
+        throw new Error(
+          [xaiError, geminiError, `gateway ${res.status}`].filter(Boolean).join("; "),
+        );
       }
       return parseChatJson(res);
     }

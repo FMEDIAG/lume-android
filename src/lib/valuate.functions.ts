@@ -833,6 +833,9 @@ export const valuateItem = createServerFn({ method: "POST" })
       }
       console.error("[valuateItem] failed:", err);
       setResponseStatus(502);
-      throw new Error("Valuation service unavailable");
+      throw new Error(
+        "Valuation service unavailable: " +
+          (err instanceof Error ? err.message : String(err)).slice(0, 200),
+      );
     }
   });

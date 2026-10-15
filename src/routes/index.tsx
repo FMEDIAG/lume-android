@@ -2,7 +2,18 @@ import { toast } from "sonner";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
-import { Camera, Images, Sparkles, History, Trash2, Save, Check, Globe, Focus, Heart } from "lucide-react";
+import {
+  Camera,
+  Images,
+  Sparkles,
+  History,
+  Trash2,
+  Save,
+  Check,
+  Globe,
+  Focus,
+  Heart,
+} from "lucide-react";
 import { CameraCapture } from "@/components/CameraCapture";
 import { IntroScreen, INTRO_SEEN_KEY } from "@/components/IntroScreen";
 
@@ -189,7 +200,16 @@ function Index() {
       setResult({ ...r, thumbnail: photos[0].dataUrl });
     } catch (e) {
       console.error(e);
-      setError(t.error + " [" + (e instanceof Error ? e.message : String(e)) + "]");
+      const quota = e instanceof Error && e.message.includes("quota");
+      setError(
+        quota
+          ? lang === "es"
+            ? "Se ha alcanzado el límite diario de IA. Inténtalo de nuevo más tarde."
+            : "The daily AI limit has been reached. Please try again later."
+          : lang === "es"
+            ? "No se pudo completar la tasación. Revisa el contexto o inténtalo de nuevo en unos minutos."
+            : "The valuation could not be completed. Check the context or try again in a few minutes.",
+      );
     } finally {
       setLoading(false);
     }
@@ -286,7 +306,7 @@ function Index() {
 
               <div className="mt-6 grid grid-cols-3 gap-3">
                 <button
-                 onClick={() => cameraRef.current?.click()}
+                  onClick={() => cameraRef.current?.click()}
                   className="glass-crystal group flex flex-col items-center justify-center gap-2 rounded-2xl px-3 py-6 transition hover:scale-[1.02]"
                 >
                   <Camera className="h-7 w-7 text-primary transition group-hover:scale-110" />
@@ -444,13 +464,13 @@ function Index() {
                 </div>
               </div>
 
-                <textarea
-                  value={context}
-                  onChange={(e) => setContext(e.target.value)}
-                  placeholder={t.context}
-                  rows={2}
-                  className="mt-3 w-full resize-none rounded-xl border border-primary/20 bg-input px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring/40"
-                />
+              <textarea
+                value={context}
+                onChange={(e) => setContext(e.target.value)}
+                placeholder={t.context}
+                rows={2}
+                className="mt-3 w-full resize-none rounded-xl border border-primary/20 bg-input px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring/40"
+              />
 
               <button
                 disabled={!canValuate}

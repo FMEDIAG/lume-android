@@ -402,6 +402,15 @@ async function tryMagicCard(data: z.infer<typeof InputSchema>): Promise<Valuatio
   });
 }
 
+// Pon esto en false para desactivar la identificación previa: se gasta una petición de IA menos por tasación.
+const USE_IDENTIFICATION_PASS = true;
+
+// Errores de cuota o límite de peticiones del proveedor de IA (no merece la pena reintentar).
+function isQuotaError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /429|RESOURCE_EXHAUSTED/i.test(msg);
+}
+
 const ItemIdSchema = z.object({
   summary: z.string().max(1500).catch(""),
   searchQueries: z.array(z.string().max(120)).max(4).catch([]),
@@ -696,6 +705,7 @@ export const valuateItem = createServerFn({ method: "POST" })
             return await priceCoin(data, id, spots);
           } catch (coinErr) {
             lastCoinErr = coinErr;
+            if (isQuotaError(coinErr)) break;
           }
         }
         throw lastCoinErr;
@@ -707,6 +717,7 @@ export const valuateItem = createServerFn({ method: "POST" })
           if (card) return card;
         } catch (cardErr) {
           console.error("[valuateItem] Magic card lookup failed, using general flow:", cardErr);
+          if (isQuotaError(cardErr)) throw cardErr;
         }
       }
 
@@ -739,9 +750,10 @@ export const valuateItem = createServerFn({ method: "POST" })
 
       let itemId: ItemId | null = null;
       try {
-        itemId = await identifyItem(data);
+        if (USE_IDENTIFICATION_PASS) itemId = await identifyItem(data);
       } catch (idErr) {
         console.error("[valuateItem] identification pass failed, continuing without it:", idErr);
+        if (isQuotaError(idErr)) throw idErr;
       }
       const queriesTxt = itemId && itemId.searchQueries.length ? itemId.searchQueries.join(" | ") : "";
       const idLine =
@@ -817,7 +829,10 @@ export const valuateItem = createServerFn({ method: "POST" })
           return withMissingInfo(r, itemId, data.lang);
         } catch (attemptErr) {
           lastErr = attemptErr;
-          if (attempt === 2 && zeroFallback) return withMissingInfo(zeroFallback, itemId, data.lang);
+          if ((attempt === 2 || isQuotaError(attemptErr)) && zeroFallback) {
+            return withMissingInfo(zeroFallback, itemId, data.lang);
+          }
+          if (isQuotaError(attemptErr)) break;
         }
       }
       throw lastErr;
@@ -827,15 +842,17 @@ export const valuateItem = createServerFn({ method: "POST" })
         setResponseStatus(504);
         throw new Error("Valuation service timed out");
       }
+      if (isQuotaError(err)) {
+        console.error("[valuateItem] AI quota exceeded:", err);
+        setResponseStatus(429);
+        throw new Error("Valuation quota exceeded");
+      }
       if (err instanceof Error && err.message.startsWith("Valuation")) {
         setResponseStatus(502);
         throw err;
       }
       console.error("[valuateItem] failed:", err);
       setResponseStatus(502);
-      throw new Error(
-        "Valuation service unavailable: " +
-          (err instanceof Error ? err.message : String(err)).slice(0, 200),
-      );
+      throw new Error("Valuation service unavailable");
     }
   });

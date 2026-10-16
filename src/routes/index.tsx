@@ -154,10 +154,21 @@ function Index() {
           setCategory(r.category);
         }
       })
-      .catch(() => {
+      .catch((e) => {
+        console.error(e);
         setSuggested(null);
         setSuggestedConfidence(null);
         setCandidates([]);
+        const quota = e instanceof Error && e.message.includes("quota");
+        toast.error(
+          lang === "es"
+            ? quota
+              ? "Límite diario de IA alcanzado: elige la categoría a mano."
+              : "No se pudo detectar la categoría automáticamente: elígela a mano."
+            : quota
+              ? "Daily AI limit reached: please choose the category manually."
+              : "Could not detect the category automatically: please choose it manually.",
+        );
       })
       .finally(() => setDetecting(false));
   }, [photos, lang, detect, category]);

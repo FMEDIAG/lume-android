@@ -166,7 +166,19 @@ export async function chatCompletion(opts: {
       } catch (geminiErr) {
         console.error("[lume-ai] Gemini failed:", geminiErr);
         geminiError = geminiErr instanceof Error ? geminiErr.message : String(geminiErr);
-        if (!lovableKey) throw geminiErr;
+        // Cuota agotada (a menudo la de búsqueda web): probamos sin búsqueda antes de rendirnos.
+        // La tasación sale menos precisa, pero sale.
+        if (opts.search && /429|RESOURCE_EXHAUSTED/i.test(geminiError)) {
+          try {
+            console.error("[lume-ai] Retrying Gemini without web search");
+            return await geminiCompletion(geminiKey, { ...opts, search: false }, controller.signal);
+          } catch (noSearchErr) {
+            console.error("[lume-ai] Gemini without search failed:", noSearchErr);
+            geminiError +=
+              "; no-search " + (noSearchErr instanceof Error ? noSearchErr.message : String(noSearchErr));
+          }
+        }
+        if (!lovableKey) throw new Error(geminiError);
       }
     }
     // Si xAI no está configurada, o falló (clave inválida, sin crédito, error de red...),

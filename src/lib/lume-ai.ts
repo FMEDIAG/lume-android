@@ -1,13 +1,15 @@
-import { getRequest } from "@tanstack/react-start/server";
 
+Lume ai · TS
+import { getRequest } from "@tanstack/react-start/server";
+ 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
   .split(",")
   .map((o) => o.trim())
   .filter(Boolean);
-
+ 
 const PREVIEW_HOST_RE =
   /(^|\.)(lovable\.app|lovable\.dev|lovableproject\.com|grok\.me|grok\.com|x\.ai)$/i;
-
+ 
 export function isAllowedOrigin(origin: string | null, host: string | null): boolean {
   if (host) {
     const hostOnly = host.split(":")[0] ?? host;
@@ -33,7 +35,7 @@ export function isAllowedOrigin(origin: string | null, host: string | null): boo
   }
   return false;
 }
-
+ 
 export function clientIp(): string {
   const request = getRequest();
   return (
@@ -43,7 +45,7 @@ export function clientIp(): string {
     "unknown"
   );
 }
-
+ 
 export function requestOriginHost(): { origin: string | null; host: string | null } {
   const request = getRequest();
   return {
@@ -51,17 +53,17 @@ export function requestOriginHost(): { origin: string | null; host: string | nul
     host: request?.headers.get("host") ?? null,
   };
 }
-
+ 
 type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string | Array<Record<string, unknown>>;
 };
-
+ 
 export type ChatResult = {
   text: string;
   citations: string[];
 };
-
+ 
 async function parseChatJson(res: Response): Promise<ChatResult> {
   const json = (await res.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
@@ -73,7 +75,7 @@ async function parseChatJson(res: Response): Promise<ChatResult> {
     citations: Array.isArray(json.citations) ? json.citations.slice(0, 8) : [],
   };
 }
-
+ 
 function xaiBody(opts: {
   messages: ChatMessage[];
   json?: boolean;
@@ -97,7 +99,7 @@ function xaiBody(opts: {
   }
   return body;
 }
-
+ 
 export function extractJsonText(raw: string): string {
   const trimmed = raw.trim();
   const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -107,7 +109,7 @@ export function extractJsonText(raw: string): string {
   if (start < 0 || end <= start) return body;
   return body.slice(start, end + 1);
 }
-
+ 
 export async function chatCompletion(opts: {
   messages: ChatMessage[];
   json?: boolean;
@@ -118,17 +120,17 @@ export async function chatCompletion(opts: {
   const timeoutMs = opts.timeoutMs ?? 45_000;
   const xaiKey = process.env.XAI_API_KEY;
   const lovableKey = process.env.LOVABLE_API_KEY;
-
+ 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
+ 
   try {
     let xaiError: string | null = null;
-
+ 
     if (xaiKey) {
       const searchModes: Array<"web_search" | "live_search" | "search_parameters" | "none"> =
         opts.search ? ["web_search", "live_search", "search_parameters", "none"] : ["none"];
-
+ 
       let lastErr = "";
       for (const mode of searchModes) {
         try {
@@ -158,9 +160,24 @@ export async function chatCompletion(opts: {
       }
       xaiError = `xAI failed: ${lastErr.slice(0, 120)}`;
     }
-    let geminiError: string | null = null;
+    let geminiError = null as string | null;
+    let mistralError = null as string | null;
     const geminiKey = process.env.GEMINI_API_KEY;
-    if (geminiKey) {
+    const mistralKey = process.env.MISTRAL_API_KEY;
+ 
+    const tryMistral = async (): Promise<ChatResult | null> => {
+      if (!mistralKey) return null;
+      try {
+        return await mistralCompletion(mistralKey, opts, controller.signal);
+      } catch (err) {
+        console.error("[lume-ai] Mistral failed:", err);
+        mistralError = err instanceof Error ? err.message : String(err);
+        return null;
+      }
+    };
+ 
+    const tryGemini = async (): Promise<ChatResult | null> => {
+      if (!geminiKey) return null;
       try {
         return await geminiCompletion(geminiKey, opts, controller.signal);
       } catch (geminiErr) {
@@ -175,11 +192,22 @@ export async function chatCompletion(opts: {
           } catch (noSearchErr) {
             console.error("[lume-ai] Gemini without search failed:", noSearchErr);
             geminiError +=
-              "; no-search " + (noSearchErr instanceof Error ? noSearchErr.message : String(noSearchErr));
+              "; no-search " +
+              (noSearchErr instanceof Error ? noSearchErr.message : String(noSearchErr));
           }
         }
-        if (!lovableKey) throw new Error(geminiError);
+        return null;
       }
+    };
+ 
+    const geminiFirst = opts.search === true && USE_GEMINI_FOR_SEARCH;
+    const providers = geminiFirst ? [tryGemini, tryMistral] : [tryMistral, tryGemini];
+    for (const attempt of providers) {
+      const result = await attempt();
+      if (result) return result;
+    }
+    if (!lovableKey && (mistralError || geminiError)) {
+      throw new Error([xaiError, mistralError, geminiError].filter(Boolean).join("; "));
     }
     // Si xAI no está configurada, o falló (clave inválida, sin crédito, error de red...),
     // caemos de verdad al gateway de Lovable en vez de fallar toda la tasación.
@@ -201,18 +229,18 @@ export async function chatCompletion(opts: {
         const text = await res.text();
         console.error(`[lume-ai] Lovable error [${res.status}]: ${text.slice(0, 400)}`);
         throw new Error(
-          [xaiError, geminiError, `gateway ${res.status}`].filter(Boolean).join("; "),
+          [xaiError, mistralError, geminiError, `gateway ${res.status}`].filter(Boolean).join("; "),
         );
       }
       return parseChatJson(res);
     }
-
+ 
     throw new Error(xaiError ?? "AI is not available in this environment");
   } finally {
     clearTimeout(timeout);
   }
 }
-
+ 
 export type MetalSpots = {
   goldUsd: number;
   silverUsd: number;
@@ -220,7 +248,7 @@ export type MetalSpots = {
   silverEur: number;
   eurPerUsd: number;
 };
-
+ 
 async function fetchJson(url: string, ms: number): Promise<unknown | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ms);
@@ -234,7 +262,7 @@ async function fetchJson(url: string, ms: number): Promise<unknown | null> {
     clearTimeout(timeout);
   }
 }
-
+ 
 export async function getMetalSpots(): Promise<MetalSpots | null> {
   const [gold, silver, fx] = await Promise.all([
     fetchJson("https://api.gold-api.com/price/XAU", 4000),
@@ -255,14 +283,14 @@ export async function getMetalSpots(): Promise<MetalSpots | null> {
     silverEur: silverUsd * eurPerUsd,
   };
 }
-
+ 
 export function roundMoney(n: number): number {
   if (!Number.isFinite(n) || n < 0) return 0;
   if (n < 1) return Math.round(n * 100) / 100;
   if (n < 100) return Math.round(n * 10) / 10;
   return Math.round(n);
 }
-
+ 
 function toGeminiContents(messages: ChatMessage[]) {
   const system: string[] = [];
   const contents: Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> = [];
@@ -289,7 +317,76 @@ function toGeminiContents(messages: ChatMessage[]) {
   }
   return { system: system.join("\n\n"), contents };
 }
-
+ 
+// Orden de proveedores: xAI (si hay clave) -> Mistral (si hay MISTRAL_API_KEY) -> Gemini -> Lovable.
+// La API de chat de Mistral no hace búsqueda web. Pon esto en true para que las peticiones que
+// piden búsqueda web sigan yendo primero a Gemini (y Mistral quede como respaldo).
+const USE_GEMINI_FOR_SEARCH = false;
+ 
+async function mistralCompletion(
+  apiKey: string,
+  opts: { messages: ChatMessage[]; json?: boolean; maxTokens?: number },
+  signal: AbortSignal,
+): Promise<ChatResult> {
+  // Mistral espera la imagen como texto (URL o data URL) en image_url.
+  const messages = opts.messages.map((m) => {
+    if (typeof m.content === "string") return { role: m.role, content: m.content };
+    return {
+      role: m.role,
+      content: m.content.map((part) => {
+        if (part.type === "image_url") {
+          const img = part.image_url as { url?: string } | string | undefined;
+          return { type: "image_url", image_url: typeof img === "string" ? img : (img?.url ?? "") };
+        }
+        return part;
+      }),
+    };
+  });
+ 
+  // Modelo grande para tasar; pequeño y barato para tareas ligeras (detección, identificación).
+  const light = (opts.maxTokens ?? 2200) <= 700;
+  const body: Record<string, unknown> = {
+    model: light ? "mistral-small-latest" : "mistral-large-latest",
+    messages,
+    max_tokens: opts.maxTokens ?? 2200,
+    temperature: 0.2,
+  };
+  if (opts.json) body.response_format = { type: "json_object" };
+ 
+  const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+    signal,
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    console.error(`[lume-ai] Mistral error [${res.status}]: ${text.slice(0, 400)}`);
+    let reason = "";
+    try {
+      const j = JSON.parse(text) as { message?: string; code?: string | number; type?: string };
+      reason = [j.type, j.code].filter(Boolean).join(" ");
+      if (!reason && j.message) reason = j.message.slice(0, 80);
+    } catch {
+      /* respuesta que no es JSON */
+    }
+    throw new Error(reason ? `mistral ${res.status} ${reason}` : `mistral ${res.status}`);
+  }
+  const json = JSON.parse(text) as {
+    choices?: Array<{
+      message?: { content?: string | Array<{ type?: string; text?: string }> };
+    }>;
+  };
+  const content = json.choices?.[0]?.message?.content;
+  const raw =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.map((c) => c.text ?? "").join("")
+        : "";
+  return { text: extractJsonText(raw || "{}"), citations: [] };
+}
+ 
 async function geminiCompletion(
   apiKey: string,
   opts: { messages: ChatMessage[]; json?: boolean; search?: boolean },
@@ -302,7 +399,7 @@ async function geminiCompletion(
   }
   if (system) body.systemInstruction = { parts: [{ text: system }] };
   if (opts.search) body.tools = [{ google_search: {} }];
-
+ 
   const res = await fetch(
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
     {

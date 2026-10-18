@@ -1,5 +1,3 @@
-
-Lume ai · TS
 import { getRequest } from "@tanstack/react-start/server";
  
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
@@ -440,3 +438,4 @@ async function geminiCompletion(
     .slice(0, 8);
   return { text: extractJsonText(raw || "{}"), citations };
 }
+ 

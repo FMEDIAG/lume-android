@@ -24,6 +24,9 @@ import { saveValuation, type Valuation } from "@/lib/history";
 import { formatNumber } from "@/lib/formatPrice";
 import { extractPricePerSqm } from "@/lib/pricePerSqm";
 //
+// Pon esto en false para ocultar el motivo técnico que se añade entre corchetes a los avisos de error.
+const SHOW_ERROR_DETAILS = true;
+
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
@@ -212,14 +215,19 @@ function Index() {
     } catch (e) {
       console.error(e);
       const quota = e instanceof Error && e.message.includes("quota");
+      const detail =
+        SHOW_ERROR_DETAILS && e instanceof Error && e.message.includes(": ")
+          ? ` [${e.message.split(": ").slice(1).join(": ")}]`
+          : "";
       setError(
-        quota
+        (quota
           ? lang === "es"
             ? "Se ha alcanzado el límite diario de IA. Inténtalo de nuevo más tarde."
             : "The daily AI limit has been reached. Please try again later."
           : lang === "es"
             ? "No se pudo completar la tasación. Revisa el contexto o inténtalo de nuevo en unos minutos."
-            : "The valuation could not be completed. Check the context or try again in a few minutes.",
+            : "The valuation could not be completed. Check the context or try again in a few minutes.") +
+          detail,
       );
     } finally {
       setLoading(false);

@@ -1,13 +1,13 @@
 import { getRequest } from "@tanstack/react-start/server";
- 
+
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
   .split(",")
   .map((o) => o.trim())
   .filter(Boolean);
- 
+
 const PREVIEW_HOST_RE =
   /(^|\.)(lovable\.app|lovable\.dev|lovableproject\.com|grok\.me|grok\.com|x\.ai)$/i;
- 
+
 export function isAllowedOrigin(origin: string | null, host: string | null): boolean {
   if (host) {
     const hostOnly = host.split(":")[0] ?? host;
@@ -33,7 +33,7 @@ export function isAllowedOrigin(origin: string | null, host: string | null): boo
   }
   return false;
 }
- 
+
 export function clientIp(): string {
   const request = getRequest();
   return (
@@ -43,7 +43,7 @@ export function clientIp(): string {
     "unknown"
   );
 }
- 
+
 export function requestOriginHost(): { origin: string | null; host: string | null } {
   const request = getRequest();
   return {
@@ -51,17 +51,17 @@ export function requestOriginHost(): { origin: string | null; host: string | nul
     host: request?.headers.get("host") ?? null,
   };
 }
- 
+
 type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string | Array<Record<string, unknown>>;
 };
- 
+
 export type ChatResult = {
   text: string;
   citations: string[];
 };
- 
+
 async function parseChatJson(res: Response): Promise<ChatResult> {
   const json = (await res.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
@@ -73,7 +73,7 @@ async function parseChatJson(res: Response): Promise<ChatResult> {
     citations: Array.isArray(json.citations) ? json.citations.slice(0, 8) : [],
   };
 }
- 
+
 function xaiBody(opts: {
   messages: ChatMessage[];
   json?: boolean;
@@ -97,7 +97,7 @@ function xaiBody(opts: {
   }
   return body;
 }
- 
+
 export function extractJsonText(raw: string): string {
   const trimmed = raw.trim();
   const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -107,7 +107,7 @@ export function extractJsonText(raw: string): string {
   if (start < 0 || end <= start) return body;
   return body.slice(start, end + 1);
 }
- 
+
 export async function chatCompletion(opts: {
   messages: ChatMessage[];
   json?: boolean;
@@ -118,17 +118,17 @@ export async function chatCompletion(opts: {
   const timeoutMs = opts.timeoutMs ?? 45_000;
   const xaiKey = process.env.XAI_API_KEY;
   const lovableKey = process.env.LOVABLE_API_KEY;
- 
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
- 
+
   try {
     let xaiError: string | null = null;
- 
+
     if (xaiKey) {
       const searchModes: Array<"web_search" | "live_search" | "search_parameters" | "none"> =
         opts.search ? ["web_search", "live_search", "search_parameters", "none"] : ["none"];
- 
+
       let lastErr = "";
       for (const mode of searchModes) {
         try {
@@ -162,7 +162,7 @@ export async function chatCompletion(opts: {
     let mistralError = null as string | null;
     const geminiKey = process.env.GEMINI_API_KEY;
     const mistralKey = process.env.MISTRAL_API_KEY;
- 
+
     const tryMistral = async (): Promise<ChatResult | null> => {
       if (!mistralKey) return null;
       try {
@@ -173,7 +173,7 @@ export async function chatCompletion(opts: {
         return null;
       }
     };
- 
+
     const tryGemini = async (): Promise<ChatResult | null> => {
       if (!geminiKey) return null;
       try {
@@ -197,7 +197,7 @@ export async function chatCompletion(opts: {
         return null;
       }
     };
- 
+
     const geminiFirst = opts.search === true && USE_GEMINI_FOR_SEARCH;
     const providers = geminiFirst ? [tryGemini, tryMistral] : [tryMistral, tryGemini];
     for (const attempt of providers) {
@@ -232,13 +232,13 @@ export async function chatCompletion(opts: {
       }
       return parseChatJson(res);
     }
- 
+
     throw new Error(xaiError ?? "AI is not available in this environment");
   } finally {
     clearTimeout(timeout);
   }
 }
- 
+
 export type MetalSpots = {
   goldUsd: number;
   silverUsd: number;
@@ -246,7 +246,7 @@ export type MetalSpots = {
   silverEur: number;
   eurPerUsd: number;
 };
- 
+
 async function fetchJson(url: string, ms: number): Promise<unknown | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ms);
@@ -260,7 +260,7 @@ async function fetchJson(url: string, ms: number): Promise<unknown | null> {
     clearTimeout(timeout);
   }
 }
- 
+
 export async function getMetalSpots(): Promise<MetalSpots | null> {
   const [gold, silver, fx] = await Promise.all([
     fetchJson("https://api.gold-api.com/price/XAU", 4000),
@@ -281,14 +281,14 @@ export async function getMetalSpots(): Promise<MetalSpots | null> {
     silverEur: silverUsd * eurPerUsd,
   };
 }
- 
+
 export function roundMoney(n: number): number {
   if (!Number.isFinite(n) || n < 0) return 0;
   if (n < 1) return Math.round(n * 100) / 100;
   if (n < 100) return Math.round(n * 10) / 10;
   return Math.round(n);
 }
- 
+
 function toGeminiContents(messages: ChatMessage[]) {
   const system: string[] = [];
   const contents: Array<{ role: "user" | "model"; parts: Array<Record<string, unknown>> }> = [];
@@ -315,12 +315,12 @@ function toGeminiContents(messages: ChatMessage[]) {
   }
   return { system: system.join("\n\n"), contents };
 }
- 
+
 // Orden de proveedores: xAI (si hay clave) -> Mistral (si hay MISTRAL_API_KEY) -> Gemini -> Lovable.
 // La API de chat de Mistral no hace búsqueda web. Pon esto en true para que las peticiones que
 // piden búsqueda web sigan yendo primero a Gemini (y Mistral quede como respaldo).
 const USE_GEMINI_FOR_SEARCH = false;
- 
+
 async function mistralCompletion(
   apiKey: string,
   opts: { messages: ChatMessage[]; json?: boolean; maxTokens?: number },
@@ -340,7 +340,7 @@ async function mistralCompletion(
       }),
     };
   });
- 
+
   // Modelo grande para tasar; pequeño y barato para tareas ligeras (detección, identificación).
   const light = (opts.maxTokens ?? 2200) <= 700;
   const body: Record<string, unknown> = {
@@ -350,7 +350,7 @@ async function mistralCompletion(
     temperature: 0.2,
   };
   if (opts.json) body.response_format = { type: "json_object" };
- 
+
   const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -384,7 +384,7 @@ async function mistralCompletion(
         : "";
   return { text: extractJsonText(raw || "{}"), citations: [] };
 }
- 
+
 async function geminiCompletion(
   apiKey: string,
   opts: { messages: ChatMessage[]; json?: boolean; search?: boolean },
@@ -397,7 +397,7 @@ async function geminiCompletion(
   }
   if (system) body.systemInstruction = { parts: [{ text: system }] };
   if (opts.search) body.tools = [{ google_search: {} }];
- 
+
   const res = await fetch(
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
     {
@@ -438,4 +438,3 @@ async function geminiCompletion(
     .slice(0, 8);
   return { text: extractJsonText(raw || "{}"), citations };
 }
- 

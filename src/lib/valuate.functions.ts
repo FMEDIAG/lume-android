@@ -10,7 +10,6 @@ import {
   roundMoney,
   type MetalSpots,
 } from "@/lib/lume-ai";
-import { hasFreeApi, getCardPriceScryfall, searcheBayCompleted, getWatchPriceEstimate, getComicPrice, getStampPrice } from "@/lib/free-apis";
 import {
   applyCoinPriceGuards,
   typicalFineWeightG,
@@ -39,7 +38,6 @@ const InputSchema = z
     category: z.string().max(50).optional().default("auto"),
     condition: z.string().max(30).optional().default("unknown"),
     lang: z.enum(["es", "en"]).default("es"),
-    title: z.string().max(200).optional().default(""),
   })
   .refine(
     (val) => val.photos.reduce((sum, p) => sum + p.dataUrl.length, 0) <= MAX_TOTAL_PHOTO_CHARS,
@@ -407,6 +405,14 @@ async function tryMagicCard(data: z.infer<typeof InputSchema>): Promise<Valuatio
 // Pon esto en false para desactivar la identificación previa: se gasta una petición de IA menos por tasación.
 const USE_IDENTIFICATION_PASS = true;
 
+// Pon esto en false para que los errores no incluyan el motivo técnico del proveedor de IA.
+const SHOW_ERROR_DETAILS = true;
+
+function errorDetail(err: unknown): string {
+  if (!SHOW_ERROR_DETAILS) return "";
+  return ": " + (err instanceof Error ? err.message : String(err)).slice(0, 200);
+}
+
 // Errores de cuota o límite de peticiones del proveedor de IA (no merece la pena reintentar).
 function isQuotaError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
@@ -697,132 +703,6 @@ export const valuateItem = createServerFn({ method: "POST" })
       throw new Error("Too many requests");
     }
 
-    // PASO 1: Intentar usar API gratuita específica por categoría (ahorro de créditos)
-    const category = data.category || "auto";
-    if (hasFreeApi(category) && category !== "auto") {
-      try {
-        // Cartas coleccionables: Scryfall API
-        if (category === "card" || category.includes("collectible")) {
-          const cardResult = await getCardPriceScryfall(
-            `${data.title || ""} ${data.context || ""}`
-          );
-          if (cardResult?.exists && cardResult.usd) {
-            const price = cardResult.usd;
-            console.log("[valuateItem] Scryfall price found, returning without IA");
-            return {
-              title: data.title || "Objeto coleccionable",
-              identification: `Precio consultado en Scryfall: $${price.toFixed(2)} USD`,
-              priceEurMin: Math.round(price * 0.90),
-              priceEurMax: Math.round(price * 1.10),
-              priceUsdMin: price,
-              priceUsdMax: price,
-              confidence: "medium",
-              notes: `Precio consultado via Scryfall API${cardResult.usdFoil ? ` Versión foil: $${cardResult.usdFoil.toFixed(2)}` : ""}`,
-              sources: ["Scryfall"],
-            } as ValuationResult;
-          }
-        }
-
-        // Relojes: datos aproximados
-        if (category === "watches" || category === "watch") {
-          const watchData = await getWatchPriceEstimate(
-            data.title || "Rolex",
-            data.context || "Submariner"
-          );
-          if (watchData) {
-            const priceUsd = (watchData.priceRangeUsd[0] + watchData.priceRangeUsd[1]) / 2;
-            console.log("[valuateItem] Watch price estimate returned without IA");
-            return {
-              title: data.title || "Reloj",
-              identification: `Reloj ${watchData.brand} ${watchData.model}. Material: ${watchData.material}, Movimiento: ${watchData.movement}`,
-              priceEurMin: Math.round(priceUsd * 0.90),
-              priceEurMax: Math.round(priceUsd * 1.10),
-              priceUsdMin: priceUsd * 0.95,
-              priceUsdMax: priceUsd * 1.05,
-              confidence: "low",
-              notes: `Precio estimado basado en datos de mercado para ${watchData.brand} ${watchData.model}. ${watchData.material} ${watchData.movement}.`,
-              sources: ["WatchCharts data"],
-            } as ValuationResult;
-          }
-        }
-
-        // Cómics: precio guía
-        if (category === "comics" || category === "comic") {
-          const comicData = await getComicPrice(data.title || "");
-          if (comicData) {
-            console.log("[valuateItem] Comic price found, returning without IA");
-            return {
-              title: data.title || "Cómic",
-              identification: `Cómic ${comicData.title}. Primera aparición: ${comicData.firstAppearance}.grado: ${comicData.grade}`,
-              priceEurMin: Math.round(comicData.priceGuideUsd * 0.85),
-              priceEurMax: Math.round(comicData.priceGuideUsd * 1.15),
-              priceUsdMin: comicData.priceGuideUsd,
-              priceUsdMax: comicData.priceGuideUsd,
-              confidence: "medium",
-              notes: `Precio guía consultado. ${comicData.firstAppearance}`,
-              sources: ["Comic Price Guide"],
-            } as ValuationResult;
-          }
-        }
-
-        // Sellos: precio filatelia
-        if (category === "stamps" || category === "philately") {
-          const countryMatch = (data.title || data.context || "").match(/([A-Z]{2})-(\d{4})/i);
-          const country = countryMatch ? countryMatch[1] : "US";
-          const year = countryMatch ? parseInt(countryMatch[2]) : new Date().getFullYear();
-          const description = (data.title || data.context || "sello").replace(/-\d{4}/i, "").trim();
-          const stampData = await getStampPrice(country, year, description);
-          if (stampData) {
-            console.log("[valuateItem] Stamp price found, returning without IA");
-            return {
-              title: data.title || "Sello",
-              identification: `Sello ${stampData.country} ${stampData.year}. ${stampData.description}`,
-              priceEurMin: Math.round(stampData.priceUsd * 0.85),
-              priceEurMax: Math.round(stampData.priceUsd * 1.15),
-              priceUsdMin: stampData.priceUsd,
-              priceUsdMax: stampData.priceUsd,
-              confidence: "low",
-              notes: `Sello filatelia. Precio USD: $${stampData.priceUsd.toFixed(2)}. ${stampData.catalogValueUsd ? `Valor catálogo: $${stampData.catalogValueUsd.toFixed(2)}` : ""}`,
-              sources: ["Filatelia data"],
-            } as ValuationResult;
-          }
-        }
-
-        // Electrónica y vehículos: eBay completed items
-        if (
-          category === "electronics" ||
-          category === "vehicles" ||
-          category === "car" ||
-          category === "cars" ||
-          category === "boats" ||
-          category === "boat"
-        ) {
-          const query = `${data.title || ""} ${data.context || ""}`.trim();
-          if (query) {
-            const ebayResults = await searcheBayCompleted(query);
-            if (ebayResults.length > 0) {
-              const bestResult = ebayResults[0];
-              const priceUsd = parseFloat(bestResult.price.replace(/[^\d]/g, "") || "0");
-              console.log("[valuateItem] eBay result found, returning without IA");
-              return {
-                title: data.title || "Artículo",
-                identification: `Precio consultado en eBay completados: ${bestResult.title}`,
-                priceEurMin: Math.round(priceUsd * 0.90),
-                priceEurMax: Math.round(priceUsd * 1.10),
-                priceUsdMin: priceUsd * 0.95,
-                priceUsdMax: priceUsd * 1.05,
-                confidence: "low",
-                notes: `Consultado en eBay (venta completada). ${bestResult.link || ""}`,
-                sources: ["eBay completed listings"],
-              } as ValuationResult;
-            }
-          }
-        }
-      } catch (freeErr) {
-        console.log("[valuateItem] Free API failed, continuing with IA:", freeErr);
-      }
-    }
-
     try {
       if (isCoinValuation(data.category, data.context)) {
         let lastCoinErr: unknown = null;
@@ -973,7 +853,7 @@ export const valuateItem = createServerFn({ method: "POST" })
       if (isQuotaError(err)) {
         console.error("[valuateItem] AI quota exceeded:", err);
         setResponseStatus(429);
-        throw new Error("Valuation quota exceeded");
+        throw new Error("Valuation quota exceeded" + errorDetail(err));
       }
       if (err instanceof Error && err.message.startsWith("Valuation")) {
         setResponseStatus(502);
@@ -981,6 +861,6 @@ export const valuateItem = createServerFn({ method: "POST" })
       }
       console.error("[valuateItem] failed:", err);
       setResponseStatus(502);
-      throw new Error("Valuation service unavailable");
+      throw new Error("Valuation service unavailable" + errorDetail(err));
     }
   });

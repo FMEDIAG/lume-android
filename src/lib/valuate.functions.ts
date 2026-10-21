@@ -406,7 +406,7 @@ async function tryMagicCard(data: z.infer<typeof InputSchema>): Promise<Valuatio
 const USE_IDENTIFICATION_PASS = true;
 
 // Pon esto en false para que los errores no incluyan el motivo técnico del proveedor de IA.
-const SHOW_ERROR_DETAILS = true;
+const SHOW_ERROR_DETAILS = false;
 
 function errorDetail(err: unknown): string {
   if (!SHOW_ERROR_DETAILS) return "";

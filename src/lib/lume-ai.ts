@@ -321,6 +321,15 @@ function toGeminiContents(messages: ChatMessage[]) {
 // piden búsqueda web sigan yendo primero a Gemini (y Mistral quede como respaldo).
 const USE_GEMINI_FOR_SEARCH = false;
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// Espera antes de reintentar: la que indica el proveedor (Retry-After, en segundos) o una pausa corta.
+function retryDelayMs(res: Response, attempt: number): number {
+  const secs = Number(res.headers?.get("retry-after"));
+  const base = Number.isFinite(secs) && secs > 0 ? secs * 1000 : 1500 * attempt;
+  return Math.min(base, 6000);
+}
+
 async function mistralCompletion(
   apiKey: string,
   opts: { messages: ChatMessage[]; json?: boolean; maxTokens?: number },
@@ -351,13 +360,23 @@ async function mistralCompletion(
   };
   if (opts.json) body.response_format = { type: "json_object" };
 
-  const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify(body),
-    signal,
-  });
-  const text = await res.text();
+  // Ante un límite por minuto (429) o un fallo del servidor (5xx), esperamos y reintentamos.
+  let res!: Response;
+  let text = "";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+      signal,
+    });
+    text = await res.text();
+    if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+      await sleep(retryDelayMs(res, attempt));
+      continue;
+    }
+    break;
+  }
   if (!res.ok) {
     console.error(`[lume-ai] Mistral error [${res.status}]: ${text.slice(0, 400)}`);
     let reason = "";

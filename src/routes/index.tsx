@@ -25,7 +25,7 @@ import { formatNumber } from "@/lib/formatPrice";
 import { extractPricePerSqm } from "@/lib/pricePerSqm";
 //
 // Pon esto en false para ocultar el motivo técnico que se añade entre corchetes a los avisos de error.
-const SHOW_ERROR_DETAILS = true;
+const SHOW_ERROR_DETAILS = false;
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -162,15 +162,10 @@ function Index() {
         setSuggested(null);
         setSuggestedConfidence(null);
         setCandidates([]);
-        const quota = e instanceof Error && e.message.includes("quota");
-        toast.error(
+        toast(
           lang === "es"
-            ? quota
-              ? "Límite diario de IA alcanzado: elige la categoría a mano."
-              : "No se pudo detectar la categoría automáticamente: elígela a mano."
-            : quota
-              ? "Daily AI limit reached: please choose the category manually."
-              : "Could not detect the category automatically: please choose it manually.",
+            ? "No se pudo detectar la categoría ahora: elígela a mano."
+            : "Could not detect the category right now: please choose it manually.",
         );
       })
       .finally(() => setDetecting(false));
@@ -202,15 +197,23 @@ function Index() {
     setResult(null);
     setSaved(false);
     try {
-      const r = await valuate({
-        data: {
-          photos: photos.map((p) => ({ dataUrl: p.dataUrl })),
-          context,
-          category,
-          condition,
-          lang,
-        },
-      });
+      const payload = {
+        photos: photos.map((p) => ({ dataUrl: p.dataUrl })),
+        context,
+        category,
+        condition,
+        lang,
+      };
+      let r: Awaited<ReturnType<typeof valuate>>;
+      try {
+        r = await valuate({ data: payload });
+      } catch (first) {
+        const m = first instanceof Error ? first.message : "";
+        if (m.includes("Forbidden")) throw first;
+        // Un reintento automático tras una pausa corta (límites por minuto, picos de carga)
+        await new Promise((resolve) => setTimeout(resolve, 6000));
+        r = await valuate({ data: payload });
+      }
       setResult({ ...r, thumbnail: photos[0].dataUrl });
     } catch (e) {
       console.error(e);
@@ -222,8 +225,8 @@ function Index() {
       setError(
         (quota
           ? lang === "es"
-            ? "Se ha alcanzado el límite diario de IA. Inténtalo de nuevo más tarde."
-            : "The daily AI limit has been reached. Please try again later."
+            ? "Hay mucha demanda de IA en este momento. Espera un minuto e inténtalo de nuevo."
+            : "AI demand is high right now. Please wait a minute and try again."
           : lang === "es"
             ? "No se pudo completar la tasación. Revisa el contexto o inténtalo de nuevo en unos minutos."
             : "The valuation could not be completed. Check the context or try again in a few minutes.") +

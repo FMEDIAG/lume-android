@@ -1,6 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowLeft, ArrowUp, Check, ChevronDown, ExternalLink, Scale, Trash2, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  Check,
+  ChevronDown,
+  ExternalLink,
+  Scale,
+  Trash2,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { deleteValuation, getHistory, importHistory, type Valuation } from "@/lib/history";
 import { exportHistoryPdf, extractHistoryJsonFromPdf } from "@/lib/historyPdf";
@@ -112,7 +122,15 @@ function HistoryPage() {
       await reloadHistory();
       toast.success(t.importOk(n));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t.importError);
+      const msg =
+        e instanceof Error && e.message === "PDF_NO_LUME_DATA"
+          ? lang === "es"
+            ? "Este PDF no contiene datos de Lume. Solo se pueden importar los PDF Premium exportados desde Lume."
+            : "This PDF has no Lume data. Only Premium PDFs exported from Lume can be imported."
+          : e instanceof Error
+            ? e.message
+            : t.importError;
+      toast.error(msg);
     }
   };
 

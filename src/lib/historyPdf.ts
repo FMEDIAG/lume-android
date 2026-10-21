@@ -352,12 +352,29 @@ export async function exportHistoryPdf(lang: PdfLang = "es"): Promise<void> {
   const encoded = btoa(bytesToBinaryString(new TextEncoder().encode(payload)));
   const pdfBytes = new Uint8Array(doc.output("arraybuffer") as ArrayBuffer);
   const tail = new TextEncoder().encode(`\n${DATA_MARKER}${encoded}${DATA_END}\n`);
+  const fileName = `lume-informe-tasaciones-${new Date().toISOString().slice(0, 10)}.pdf`;
+
+  // En la app Android (WebView) no funcionan las descargas con enlaces blob:
+  // entregamos el PDF a la app nativa, que lo guarda en Descargas.
+  const bridge = (
+    window as unknown as {
+      LumeAndroid?: { saveFile?: (base64: string, name: string, mime: string) => boolean };
+    }
+  ).LumeAndroid;
+  if (bridge && typeof bridge.saveFile === "function") {
+    const all = new Uint8Array(pdfBytes.length + tail.length);
+    all.set(pdfBytes, 0);
+    all.set(tail, pdfBytes.length);
+    bridge.saveFile(btoa(bytesToBinaryString(all)), fileName, "application/pdf");
+    return;
+  }
+
   const blob = new Blob([pdfBytes, tail], { type: "application/pdf" });
 
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `lume-informe-tasaciones-${new Date().toISOString().slice(0, 10)}.pdf`;
+  a.download = fileName;
   document.body.appendChild(a);
   a.click();
   a.remove();

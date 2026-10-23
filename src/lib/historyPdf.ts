@@ -1,6 +1,9 @@
 import { jsPDF } from "jspdf";
 import { getHistory, type Valuation } from "./history";
-import { formatNumber } from "./formatPrice";
+import { formatEur, formatUsd } from "./formatPrice";
+
+// jsPDF no pinta bien el espacio sin ruptura que Intl pone junto al símbolo.
+const pdfText = (s: string) => s.replace(/[\u00a0\u202f]/g, " ");
 import { translations } from "./i18n";
 
 const NAVY: [number, number, number] = [26, 31, 58];
@@ -243,9 +246,9 @@ export async function exportHistoryPdf(lang: PdfLang = "es"): Promise<void> {
     doc.setFontSize(10.5);
     doc.setTextColor(...GOLD);
     doc.text(
-      `EUR ${formatNumber(v.priceEurMin)} – ${formatNumber(v.priceEurMax)}   |   USD ${formatNumber(
-        v.priceUsdMin,
-      )} – ${formatNumber(v.priceUsdMax)}`,
+      pdfText(
+        `${formatEur(v.priceEurMin)} – ${formatEur(v.priceEurMax)}   |   ${formatUsd(v.priceUsdMin)} – ${formatUsd(v.priceUsdMax)}`,
+      ),
       M + 12,
       y,
     );
@@ -316,9 +319,9 @@ export async function exportHistoryPdf(lang: PdfLang = "es"): Promise<void> {
   };
 
   row(t.total, String(items.length));
-  row(t.rangeEur, `€${formatNumber(sumMin)} – €${formatNumber(sumMax)}`);
-  row(t.rangeUsd, `$${formatNumber(sumMinU)} – $${formatNumber(sumMaxU)}`);
-  row(t.average, `€${formatNumber(avg)}`);
+  row(t.rangeEur, pdfText(`${formatEur(sumMin)} – ${formatEur(sumMax)}`));
+  row(t.rangeUsd, pdfText(`${formatUsd(sumMinU)} – ${formatUsd(sumMaxU)}`));
+  row(t.average, pdfText(formatEur(avg)));
 
   const byCat = new Map<string, number>();
   for (const v of items) {

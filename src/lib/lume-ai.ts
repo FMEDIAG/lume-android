@@ -114,6 +114,8 @@ export async function chatCompletion(opts: {
   search?: boolean;
   timeoutMs?: number;
   maxTokens?: number;
+  /** Tareas ligeras (clasificar, identificar): prueba antes los modelos pequeños y deja xAI como último recurso. */
+  preferFast?: boolean;
 }): Promise<ChatResult> {
   const timeoutMs = opts.timeoutMs ?? 45_000;
   const xaiKey = process.env.XAI_API_KEY;
@@ -125,7 +127,8 @@ export async function chatCompletion(opts: {
   try {
     let xaiError: string | null = null;
 
-    if (xaiKey) {
+    const tryXai = async (): Promise<ChatResult | null> => {
+      if (!xaiKey) return null;
       const searchModes: Array<"web_search" | "live_search" | "search_parameters" | "none"> =
         opts.search ? ["web_search", "live_search", "search_parameters", "none"] : ["none"];
 
@@ -157,7 +160,8 @@ export async function chatCompletion(opts: {
         }
       }
       xaiError = `xAI failed: ${lastErr.slice(0, 120)}`;
-    }
+      return null;
+    };
     let geminiError = null as string | null;
     let mistralError = null as string | null;
     const geminiKey = process.env.GEMINI_API_KEY;
@@ -199,7 +203,8 @@ export async function chatCompletion(opts: {
     };
 
     const geminiFirst = opts.search === true && USE_GEMINI_FOR_SEARCH;
-    const providers = geminiFirst ? [tryGemini, tryMistral] : [tryMistral, tryGemini];
+    const others = geminiFirst ? [tryGemini, tryMistral] : [tryMistral, tryGemini];
+    const providers = opts.preferFast ? [...others, tryXai] : [tryXai, ...others];
     for (const attempt of providers) {
       const result = await attempt();
       if (result) return result;

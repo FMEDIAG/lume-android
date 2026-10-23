@@ -794,7 +794,7 @@ export const valuateItem = createServerFn({ method: "POST" })
 
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          const { text } = await chatCompletion({
+          const { text, citations } = await chatCompletion({
             messages: [
               { role: "system", content: data.lang === "es" ? systemEs : systemEn },
               {
@@ -816,6 +816,18 @@ export const valuateItem = createServerFn({ method: "POST" })
             parsed = JSON.parse(text);
           } catch {
             throw new Error("Model did not return valid JSON");
+          }
+
+          // Si la búsqueda web consultó páginas de verdad, van primero en la lista de referencias.
+          if (citations.length > 0 && parsed && typeof parsed === "object") {
+            const p = parsed as { sources?: unknown };
+            const own = Array.isArray(p.sources)
+              ? p.sources.filter((x): x is string => typeof x === "string")
+              : [];
+            p.sources = Array.from(new Set([...citations.map((c) => c.slice(0, 200)), ...own])).slice(
+              0,
+              8,
+            );
           }
 
           parsed = applyBulkFloor(parsed);

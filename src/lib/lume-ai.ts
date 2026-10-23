@@ -169,6 +169,21 @@ export async function chatCompletion(opts: {
 
     const tryMistral = async (): Promise<ChatResult | null> => {
       if (!mistralKey) return null;
+      if (opts.search) {
+        // La búsqueda tiene su propio límite de tiempo para dejar margen al respaldo.
+        const searchCtrl = new AbortController();
+        const searchTimer = setTimeout(() => searchCtrl.abort(), Math.round(timeoutMs * 0.65));
+        const onAbort = () => searchCtrl.abort();
+        controller.signal.addEventListener("abort", onAbort);
+        try {
+          return await mistralSearchCompletion(mistralKey, opts, searchCtrl.signal);
+        } catch (searchErr) {
+          console.error("[lume-ai] Mistral web search failed, using plain chat:", searchErr);
+        } finally {
+          clearTimeout(searchTimer);
+          controller.signal.removeEventListener("abort", onAbort);
+        }
+      }
       try {
         return await mistralCompletion(mistralKey, opts, controller.signal);
       } catch (err) {
@@ -322,8 +337,8 @@ function toGeminiContents(messages: ChatMessage[]) {
 }
 
 // Orden de proveedores: xAI (si hay clave) -> Mistral (si hay MISTRAL_API_KEY) -> Gemini -> Lovable.
-// La API de chat de Mistral no hace búsqueda web. Pon esto en true para que las peticiones que
-// piden búsqueda web sigan yendo primero a Gemini (y Mistral quede como respaldo).
+// Mistral hace la búsqueda web con su API de Conversaciones (ver mistralSearchCompletion). Pon esto
+// en true para que las peticiones que piden búsqueda web vayan primero a Gemini (y Mistral de respaldo).
 const USE_GEMINI_FOR_SEARCH = false;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -335,13 +350,9 @@ function retryDelayMs(res: Response, attempt: number): number {
   return Math.min(base, 6000);
 }
 
-async function mistralCompletion(
-  apiKey: string,
-  opts: { messages: ChatMessage[]; json?: boolean; maxTokens?: number },
-  signal: AbortSignal,
-): Promise<ChatResult> {
-  // Mistral espera la imagen como texto (URL o data URL) en image_url.
-  const messages = opts.messages.map((m) => {
+// Mistral espera la imagen como texto (URL o data URL) en image_url.
+function toMistralMessages(messages: ChatMessage[]) {
+  return messages.map((m) => {
     if (typeof m.content === "string") return { role: m.role, content: m.content };
     return {
       role: m.role,
@@ -354,6 +365,94 @@ async function mistralCompletion(
       }),
     };
   });
+}
+
+// Lee la respuesta de la API de Conversaciones de Mistral: el texto del modelo y las páginas
+// que la herramienta de búsqueda web ha consultado de verdad.
+export function parseMistralConversation(json: unknown): ChatResult {
+  const outputs =
+    (json as { outputs?: Array<{ type?: string; content?: unknown }> } | null)?.outputs ?? [];
+  let raw = "";
+  const urls: string[] = [];
+  for (const out of outputs) {
+    if (out.type !== "message.output") continue;
+    if (typeof out.content === "string") {
+      raw += out.content;
+    } else if (Array.isArray(out.content)) {
+      for (const chunk of out.content as Array<{ type?: string; text?: string; url?: string }>) {
+        if (chunk.type === "tool_reference") {
+          if (typeof chunk.url === "string" && chunk.url) urls.push(chunk.url);
+        } else if (typeof chunk.text === "string") {
+          raw += chunk.text;
+        }
+      }
+    }
+  }
+  if (!raw.trim()) throw new Error("mistral search: empty response");
+  const text = extractJsonText(raw);
+  try {
+    JSON.parse(text);
+  } catch {
+    throw new Error("mistral search: response is not valid JSON");
+  }
+  return { text, citations: Array.from(new Set(urls)).slice(0, 8) };
+}
+
+// Mistral con búsqueda web REAL. La API de chat no la incluye; la de Conversaciones (beta) sí,
+// con la misma clave. Si algo falla, quien llama vuelve a la tasación sin búsqueda.
+export async function mistralSearchCompletion(
+  apiKey: string,
+  opts: { messages: ChatMessage[]; maxTokens?: number },
+  signal: AbortSignal,
+): Promise<ChatResult> {
+  const system = opts.messages
+    .filter((m) => m.role === "system")
+    .map((m) => (typeof m.content === "string" ? m.content : ""))
+    .join("\n\n");
+  const inputs = toMistralMessages(opts.messages.filter((m) => m.role !== "system"));
+  const instructions =
+    (system ? system + "\n\n" : "") +
+    "Before answering, use the web search tool to check recent sales and current prices of comparable items. Reply ONLY with the requested JSON.";
+
+  const base = {
+    model: "mistral-large-latest",
+    inputs,
+    instructions,
+    tools: [{ type: "web_search" }],
+  };
+  // Si la API rechaza algún campo opcional (422), repetimos con el cuerpo mínimo.
+  const bodies = [
+    {
+      ...base,
+      store: false,
+      completion_args: { max_tokens: opts.maxTokens ?? 2200, temperature: 0.2 },
+    },
+    base,
+  ];
+
+  let lastErr = "";
+  for (const body of bodies) {
+    const res = await fetch("https://api.mistral.ai/v1/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+      signal,
+    });
+    const text = await res.text();
+    if (res.ok) return parseMistralConversation(JSON.parse(text));
+    console.error(`[lume-ai] Mistral search error [${res.status}]: ${text.slice(0, 400)}`);
+    lastErr = `mistral search ${res.status}`;
+    if (res.status !== 422) break;
+  }
+  throw new Error(lastErr);
+}
+
+async function mistralCompletion(
+  apiKey: string,
+  opts: { messages: ChatMessage[]; json?: boolean; maxTokens?: number },
+  signal: AbortSignal,
+): Promise<ChatResult> {
+  const messages = toMistralMessages(opts.messages);
 
   // Modelo grande para tasar; pequeño y barato para tareas ligeras (detección, identificación).
   const light = (opts.maxTokens ?? 2200) <= 700;

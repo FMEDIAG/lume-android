@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import { deleteValuation, getHistory, importHistory, type Valuation } from "@/lib/history";
 import { exportHistoryPdf, extractHistoryJsonFromPdf } from "@/lib/historyPdf";
 import { translations, type Lang } from "@/lib/i18n";
-import { formatNumber } from "@/lib/formatPrice";
+import { formatEur, formatUsd } from "@/lib/formatPrice";
 import { extractPricePerSqm } from "@/lib/pricePerSqm";
 
 const ITEMS_PAGE = 5;
@@ -54,7 +54,6 @@ export const Route = createFileRoute("/history")({
   component: HistoryPage,
 });
 
-const fmt = formatNumber;
 
 function HistoryPage() {
   const [items, setItems] = useState<Valuation[]>([]);
@@ -381,10 +380,10 @@ function HistoryPage() {
                         </p>
                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                           <span className="rounded-full border border-primary/30 bg-primary/15 px-2.5 py-1 font-semibold leading-tight text-primary">
-                            €{fmt(v.priceEurMin)}–€{fmt(v.priceEurMax)}
+                            {formatEur(v.priceEurMin)} – {formatEur(v.priceEurMax)}
                           </span>
                           <span className="rounded-full border border-accent/30 bg-accent/15 px-2.5 py-1 font-semibold leading-tight text-accent">
-                            ${fmt(v.priceUsdMin)}–${fmt(v.priceUsdMax)}
+                            {formatUsd(v.priceUsdMin)} – {formatUsd(v.priceUsdMax)}
                           </span>
                           <ChevronDown
                             aria-hidden="true"
@@ -549,10 +548,10 @@ function HistoryPage() {
                       </div>
                       <div className="flex flex-col gap-1.5">
                         <span className="rounded-full border border-primary/30 bg-primary/15 px-2.5 py-1 text-center text-xs font-semibold leading-tight text-primary">
-                          €{fmt(v.priceEurMin)}–€{fmt(v.priceEurMax)}
+                          {formatEur(v.priceEurMin)} – {formatEur(v.priceEurMax)}
                         </span>
                         <span className="rounded-full border border-accent/30 bg-accent/15 px-2.5 py-1 text-center text-xs font-semibold leading-tight text-accent">
-                          ${fmt(v.priceUsdMin)}–${fmt(v.priceUsdMax)}
+                          {formatUsd(v.priceUsdMin)} – {formatUsd(v.priceUsdMax)}
                         </span>
                       </div>
                       <div>

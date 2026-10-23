@@ -21,7 +21,7 @@ import { valuateItem } from "@/lib/valuate.functions";
 import { detectCategory } from "@/lib/detect-category.functions";
 import { translations, type Lang } from "@/lib/i18n";
 import { saveValuation, type Valuation } from "@/lib/history";
-import { formatNumber } from "@/lib/formatPrice";
+import { formatEur, formatUsd } from "@/lib/formatPrice";
 import { extractPricePerSqm } from "@/lib/pricePerSqm";
 //
 // Pon esto en false para ocultar el motivo técnico que se añade entre corchetes a los avisos de error.
@@ -635,8 +635,8 @@ function ResultCard({
         </div>
 
         <div className="mt-5 grid grid-cols-2 gap-3">
-          <PriceCard label="EUR" symbol="€" min={result.priceEurMin} max={result.priceEurMax} />
-          <PriceCard label="USD" symbol="$" min={result.priceUsdMin} max={result.priceUsdMax} />
+          <PriceCard label="EUR" currency="EUR" min={result.priceEurMin} max={result.priceEurMax} />
+          <PriceCard label="USD" currency="USD" min={result.priceUsdMin} max={result.priceUsdMax} />
         </div>
 
         <div className="mt-5">
@@ -719,24 +719,22 @@ function ResultCard({
 }
 function PriceCard({
   label,
-  symbol,
+  currency,
   min,
   max,
 }: {
   label: string;
-  symbol: string;
+  currency: "EUR" | "USD";
   min: number;
   max: number;
 }) {
-  const fmt = formatNumber;
+  const fmt = currency === "EUR" ? formatEur : formatUsd;
 
   return (
     <div className="rounded-2xl border border-primary/30 bg-primary/5 p-3 text-center">
       <p className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</p>
       <p className="mt-1 text-lg font-semibold text-gradient-gold">
-        {symbol}
-        {fmt(min)} – {symbol}
-        {fmt(max)}
+        {fmt(min)} – {fmt(max)}
       </p>
     </div>
   );

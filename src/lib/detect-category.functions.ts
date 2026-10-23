@@ -144,8 +144,9 @@ export const detectCategory = createServerFn({ method: "POST" })
           ],
           json: true,
           search: false,
-          timeoutMs: 25_000,
+          timeoutMs: 12_000,
           maxTokens: 400,
+          preferFast: true,
         }));
         break;
       } catch (err) {

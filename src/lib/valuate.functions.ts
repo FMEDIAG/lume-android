@@ -368,20 +368,29 @@ async function tryMagicCard(data: z.infer<typeof InputSchema>): Promise<Valuatio
   }
 
   // Edición no determinada: rango entre la más barata y el tercer cuartil de las ediciones.
+  // Cada edición aporta su pareja EUR/USD (si falta una moneda, se convierte desde la otra): así
+  // los dos rangos salen de las mismas ediciones y son coherentes entre sí.
   const eurs: number[] = [];
   const usds: number[] = [];
   for (const c of prints) {
     const p = priceOf(c, foil);
-    if (p.eur != null) eurs.push(p.eur);
-    if (p.usd != null) usds.push(p.usd);
+    if (p.eur == null && p.usd == null) continue;
+    const both = fillBoth(p.eur, p.usd);
+    eurs.push(both.eur);
+    usds.push(both.usd);
   }
-  if (eurs.length === 0 && usds.length === 0) return null;
+  if (eurs.length === 0) return null;
   eurs.sort((a, b) => a - b);
   usds.sort((a, b) => a - b);
   const q = (arr: number[], frac: number): number | null =>
     arr.length ? arr[Math.min(arr.length - 1, Math.floor((arr.length - 1) * frac))] : null;
   const low = fillBoth(q(eurs, 0), q(usds, 0));
   const high = fillBoth(q(eurs, 0.75), q(usds, 0.75));
+  // Con una o dos ediciones el mínimo y el máximo coinciden: se abre ±15 %, como en la edición exacta.
+  const widen = (lo: number, hi: number): [number, number] =>
+    hi > lo ? [lo, hi] : [lo * 0.85, hi * 1.15];
+  const [eurLo, eurHi] = widen(low.eur, high.eur);
+  const [usdLo, usdHi] = widen(low.usd, high.usd);
   const cardName = String(prints[0]?.name ?? id.name);
 
   return ResultSchema.parse({
@@ -390,10 +399,10 @@ async function tryMagicCard(data: z.infer<typeof InputSchema>): Promise<Valuatio
       ? `${cardName} — edición no determinada (${prints.length} versiones)`
       : `${cardName} — edition not determined (${prints.length} versions)`
     ).slice(0, 2000),
-    priceEurMin: roundMoney(low.eur),
-    priceEurMax: roundMoney(high.eur),
-    priceUsdMin: roundMoney(low.usd),
-    priceUsdMax: roundMoney(high.usd),
+    priceEurMin: roundMoney(eurLo),
+    priceEurMax: roundMoney(eurHi),
+    priceUsdMin: roundMoney(usdLo),
+    priceUsdMax: roundMoney(usdHi),
     confidence: prints.length > 3 ? "low" : "medium",
     notes: es
       ? `No se pudo fijar la edición exacta. El rango va desde la versión más barata hasta el tercer cuartil de las ${prints.length} versiones existentes (Cardmarket y TCGplayer, vía Scryfall). Indica la edición o el número de colección en el contexto para afinarlo.`

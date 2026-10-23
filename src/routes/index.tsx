@@ -81,6 +81,22 @@ async function compressImage(file: File, max = 1024, quality = 0.8): Promise<str
   return canvas.toDataURL("image/jpeg", quality);
 }
 
+// Miniatura ligera solo para clasificar: sube mucho más rápido que la foto completa.
+async function makeThumbnail(dataUrl: string, max = 512, quality = 0.6): Promise<string> {
+  const img = new Image();
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error("No se pudo leer la imagen"));
+    img.src = dataUrl;
+  });
+  const scale = Math.min(1, max / Math.max(img.width, img.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
 function useLangState(): [Lang, (l: Lang) => void] {
   const [lang, setLang] = useState<Lang>("es");
   useEffect(() => {
@@ -136,8 +152,10 @@ function Index() {
 
   // Auto-detect category from the latest photo whenever photos change.
   useEffect(() => {
-    const latest = photos[photos.length - 1];
+    // Solo la primera foto decide la categoría: evita una llamada de IA por cada foto añadida.
+    const latest = photos[0];
     if (!latest) {
+      setDetecting(false);
       setSuggested(null);
       setSuggestedConfidence(null);
       setCandidates([]);
@@ -147,8 +165,11 @@ function Index() {
     if (detectedForRef.current === latest.id) return;
     detectedForRef.current = latest.id;
     setDetecting(true);
-    detect({ data: { dataUrl: latest.dataUrl, lang } })
+    makeThumbnail(latest.dataUrl)
+      .catch(() => latest.dataUrl)
+      .then((thumb) => detect({ data: { dataUrl: thumb, lang } }))
       .then((r) => {
+        if (detectedForRef.current !== latest.id) return;
         setSuggested(r.category);
         setSuggestedConfidence(r.confidence);
         setCandidates(r.candidates.slice(0, 3));
@@ -158,6 +179,7 @@ function Index() {
         }
       })
       .catch((e) => {
+        if (detectedForRef.current !== latest.id) return;
         console.error(e);
         setSuggested(null);
         setSuggestedConfidence(null);
@@ -168,7 +190,9 @@ function Index() {
             : "Could not detect the category right now: please choose it manually.",
         );
       })
-      .finally(() => setDetecting(false));
+      .finally(() => {
+        if (detectedForRef.current === latest.id) setDetecting(false);
+      });
   }, [photos, lang, detect, category]);
 
   const canValuate = photos.length >= 1 && !loading;
@@ -204,16 +228,8 @@ function Index() {
         condition,
         lang,
       };
-      let r: Awaited<ReturnType<typeof valuate>>;
-      try {
-        r = await valuate({ data: payload });
-      } catch (first) {
-        const m = first instanceof Error ? first.message : "";
-        if (m.includes("Forbidden")) throw first;
-        // Un reintento automático tras una pausa corta (límites por minuto, picos de carga)
-        await new Promise((resolve) => setTimeout(resolve, 6000));
-        r = await valuate({ data: payload });
-      }
+      // El servidor ya reintenta por su cuenta; repetirlo aquí duplicaba la espera.
+      const r = await valuate({ data: payload });
       setResult({ ...r, thumbnail: photos[0].dataUrl });
     } catch (e) {
       console.error(e);

@@ -708,8 +708,8 @@ export const valuateItem = createServerFn({ method: "POST" })
         let lastCoinErr: unknown = null;
         for (let attempt = 1; attempt <= 2; attempt++) {
           try {
-            const spots = await getMetalSpots();
-            const id = await identifyCoin(data);
+            // Cotización e identificación no dependen entre sí: en paralelo.
+            const [spots, id] = await Promise.all([getMetalSpots(), identifyCoin(data)]);
             return await priceCoin(data, id, spots);
           } catch (coinErr) {
             lastCoinErr = coinErr;
@@ -742,19 +742,9 @@ export const valuateItem = createServerFn({ method: "POST" })
             : `\nUser-stated condition: ${data.condition} (adjust price accordingly)`
           : "";
 
-      // Para joyería inyectamos también la cotización real del oro/plata, igual que
-      // en el flujo especializado de monedas: sin esto, la IA calcularía el valor de
-      // fundición de memoria (a menudo desactualizado) en vez de con el precio de hoy.
-      let metalSpotLine = "";
-      if (data.category === "jewelry") {
-        const spots = await getMetalSpots();
-        if (spots) {
-          metalSpotLine =
-            data.lang === "es"
-              ? `\nCotización actual del metal (OBLIGATORIA, no inventes otra): oro ${roundMoney(spots.goldUsd)} USD/oz troy (${roundMoney(spots.goldEur)} EUR/oz), plata ${roundMoney(spots.silverUsd)} USD/oz (${roundMoney(spots.silverEur)} EUR/oz).`
-              : `\nCurrent metal spot (MANDATORY, do not invent another): gold ${roundMoney(spots.goldUsd)} USD/troy oz (${roundMoney(spots.goldEur)} EUR/oz), silver ${roundMoney(spots.silverUsd)} USD/oz (${roundMoney(spots.silverEur)} EUR/oz).`;
-        }
-      }
+      // La cotización no depende de la identificación: se pide a la vez y se espera después.
+      const spotsPromise =
+        data.category === "jewelry" ? getMetalSpots() : Promise.resolve(null);
 
       let itemId: ItemId | null = null;
       try {
@@ -762,6 +752,18 @@ export const valuateItem = createServerFn({ method: "POST" })
       } catch (idErr) {
         console.error("[valuateItem] identification pass failed, continuing without it:", idErr);
         if (isQuotaError(idErr)) throw idErr;
+      }
+
+      // Para joyería inyectamos también la cotización real del oro/plata, igual que
+      // en el flujo especializado de monedas: sin esto, la IA calcularía el valor de
+      // fundición de memoria (a menudo desactualizado) en vez de con el precio de hoy.
+      let metalSpotLine = "";
+      const metalSpots = await spotsPromise;
+      if (metalSpots) {
+        metalSpotLine =
+          data.lang === "es"
+            ? `\nCotización actual del metal (OBLIGATORIA, no inventes otra): oro ${roundMoney(metalSpots.goldUsd)} USD/oz troy (${roundMoney(metalSpots.goldEur)} EUR/oz), plata ${roundMoney(metalSpots.silverUsd)} USD/oz (${roundMoney(metalSpots.silverEur)} EUR/oz).`
+            : `\nCurrent metal spot (MANDATORY, do not invent another): gold ${roundMoney(metalSpots.goldUsd)} USD/troy oz (${roundMoney(metalSpots.goldEur)} EUR/oz), silver ${roundMoney(metalSpots.silverUsd)} USD/oz (${roundMoney(metalSpots.silverEur)} EUR/oz).`;
       }
       const queriesTxt = itemId && itemId.searchQueries.length ? itemId.searchQueries.join(" | ") : "";
       const idLine =

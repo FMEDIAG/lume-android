@@ -506,9 +506,9 @@ function Index() {
               <textarea
                 value={context}
                 onChange={(e) => setContext(e.target.value)}
-                placeholder={t.context}
+                placeholder={(t.contextHints as Record<string, string>)[category] ?? t.context}
                 rows={2}
-                className="mt-3 w-full resize-none rounded-xl border border-primary/20 bg-input px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring/40"
+                className="mt-3 w-full resize-none rounded-xl border border-primary/20 bg-input px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring/40"
               />
 
               <button

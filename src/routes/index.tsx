@@ -14,6 +14,7 @@ import {
   Focus,
   Heart,
   ExternalLink,
+  AlertTriangle,
 } from "lucide-react";
 import { CameraCapture } from "@/components/CameraCapture";
 import { IntroScreen, INTRO_SEEN_KEY } from "@/components/IntroScreen";
@@ -24,6 +25,7 @@ import { translations, type Lang } from "@/lib/i18n";
 import { saveValuation, type Valuation } from "@/lib/history";
 import { formatEur, formatUsd } from "@/lib/formatPrice";
 import { sourceLabel, sourceUrl } from "@/lib/sourceLinks";
+import { isCategoryMismatch } from "@/lib/categoryMismatch";
 import { extractPricePerSqm } from "@/lib/pricePerSqm";
 //
 // Pon esto en false para ocultar el motivo técnico que se añade entre corchetes a los avisos de error.
@@ -197,7 +199,20 @@ function Index() {
       });
   }, [photos, lang, detect, category]);
 
-  const canValuate = photos.length >= 1 && !loading;
+  // Si la categoría elegida a mano no cuadra con la foto, se avisa y no se deja tasar.
+  const categoryMismatch =
+    !detecting &&
+    !!suggested &&
+    suggested in t.categories &&
+    category in t.categories &&
+    isCategoryMismatch({
+      chosen: category,
+      suggested,
+      confidence: suggestedConfidence,
+      candidates,
+    });
+
+  const canValuate = photos.length >= 1 && !loading && !categoryMismatch;
 
   async function onFiles(files: FileList | null) {
     if (!files) return;
@@ -218,6 +233,7 @@ function Index() {
   }
 
   async function onValuate() {
+    if (!canValuate) return; // por si se fuerza el botón desactivado
     setLoading(true);
     setError(null);
     setResult(null);
@@ -504,6 +520,30 @@ function Index() {
                   </select>
                 </div>
               </div>
+
+              {categoryMismatch && suggested && (
+                <div
+                  role="alert"
+                  className="mt-3 flex items-start gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2.5 text-xs leading-snug text-amber-200"
+                >
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <p>
+                    {t.mismatchWarning
+                      .replace("{detected}", t.categories[suggested as keyof typeof t.categories])
+                      .replace("{chosen}", t.categories[category as keyof typeof t.categories])}
+                    <button
+                      type="button"
+                      onClick={() => setCategory(suggested)}
+                      className="ml-1.5 font-semibold underline hover:text-amber-100"
+                    >
+                      {t.mismatchUse.replace(
+                        "{detected}",
+                        t.categories[suggested as keyof typeof t.categories],
+                      )}
+                    </button>
+                  </p>
+                </div>
+              )}
 
               <textarea
                 value={context}

@@ -13,6 +13,7 @@ import {
   Globe,
   Focus,
   Heart,
+  ExternalLink,
 } from "lucide-react";
 import { CameraCapture } from "@/components/CameraCapture";
 import { IntroScreen, INTRO_SEEN_KEY } from "@/components/IntroScreen";
@@ -22,6 +23,7 @@ import { detectCategory } from "@/lib/detect-category.functions";
 import { translations, type Lang } from "@/lib/i18n";
 import { saveValuation, type Valuation } from "@/lib/history";
 import { formatEur, formatUsd } from "@/lib/formatPrice";
+import { sourceLabel, sourceUrl } from "@/lib/sourceLinks";
 import { extractPricePerSqm } from "@/lib/pricePerSqm";
 //
 // Pon esto en false para ocultar el motivo técnico que se añade entre corchetes a los avisos de error.
@@ -670,12 +672,17 @@ function ResultCard({
             <p className="text-xs uppercase tracking-wider text-muted-foreground">{t.sources}</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {result.sources.map((s, i) => (
-                <span
+                <a
                   key={i}
-                  className="rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-[11px] text-primary"
+                  href={sourceUrl(s, result.title)}
+                  title={s}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-[11px] leading-tight text-primary transition hover:bg-primary/15"
                 >
-                  {s}
-                </span>
+                  {sourceLabel(s)}
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                </a>
               ))}
             </div>
           </div>

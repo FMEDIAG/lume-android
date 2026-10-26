@@ -119,6 +119,9 @@ export const translations = {
     detecting: "Detectando categoría...",
     suggested: "Sugerida por IA",
     applySuggestion: "Aplicar",
+    mismatchWarning:
+      "La foto parece {detected}, pero has elegido {chosen}. Corrige la categoría para poder tasar (o elige Otro si estás seguro).",
+    mismatchUse: "Usar {detected}",
     candidates: "Candidatas",
     exportHistory: "Exportar",
     importHistory: "Importar",
@@ -285,6 +288,9 @@ export const translations = {
     detecting: "Detecting category...",
     suggested: "AI suggestion",
     applySuggestion: "Apply",
+    mismatchWarning:
+      "The photo looks like {detected}, but you chose {chosen}. Fix the category to value it (or choose Other if you are sure).",
+    mismatchUse: "Use {detected}",
     candidates: "Candidates",
     exportHistory: "Export",
     importHistory: "Import",

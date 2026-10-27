@@ -60,6 +60,8 @@ type ChatMessage = {
 export type ChatResult = {
   text: string;
   citations: string[];
+  /** Qué pasó con la búsqueda web (para mostrarlo mientras se afina). */
+  searchDiag?: string;
 };
 
 async function parseChatJson(res: Response): Promise<ChatResult> {
@@ -169,6 +171,7 @@ export async function chatCompletion(opts: {
 
     const tryMistral = async (): Promise<ChatResult | null> => {
       if (!mistralKey) return null;
+      let searchFailure: string | null = null;
       if (opts.search) {
         // La búsqueda tiene su propio límite de tiempo para dejar margen al respaldo.
         const searchCtrl = new AbortController();
@@ -178,6 +181,9 @@ export async function chatCompletion(opts: {
         try {
           return await mistralSearchCompletion(mistralKey, opts, searchCtrl.signal);
         } catch (searchErr) {
+          searchFailure = (
+            searchErr instanceof Error ? searchErr.message : String(searchErr)
+          ).slice(0, 220);
           console.error("[lume-ai] Mistral web search failed, using plain chat:", searchErr);
         } finally {
           clearTimeout(searchTimer);
@@ -185,7 +191,13 @@ export async function chatCompletion(opts: {
         }
       }
       try {
-        return await mistralCompletion(mistralKey, opts, controller.signal);
+        const plain = await mistralCompletion(mistralKey, opts, controller.signal);
+        return searchFailure
+          ? {
+              ...plain,
+              searchDiag: `Mistral: la búsqueda web falló (${searchFailure}); tasación sin búsqueda`,
+            }
+          : plain;
       } catch (err) {
         console.error("[lume-ai] Mistral failed:", err);
         mistralError = err instanceof Error ? err.message : String(err);
@@ -388,6 +400,7 @@ export function parseMistralConversation(json: unknown): ChatResult {
       }
     }
   }
+  const toolUsed = outputs.some((o) => o.type === "tool.execution");
   if (!raw.trim()) throw new Error("mistral search: empty response");
   const text = extractJsonText(raw);
   try {
@@ -395,7 +408,11 @@ export function parseMistralConversation(json: unknown): ChatResult {
   } catch {
     throw new Error("mistral search: response is not valid JSON");
   }
-  return { text, citations: Array.from(new Set(urls)).slice(0, 8) };
+  const citations = Array.from(new Set(urls)).slice(0, 8);
+  const searchDiag = toolUsed
+    ? `Mistral: búsqueda web usada (${citations.length} páginas consultadas)`
+    : "Mistral: respondió sin usar la búsqueda web";
+  return { text, citations, searchDiag };
 }
 
 // Mistral con búsqueda web REAL. La API de chat no la incluye; la de Conversaciones (beta) sí,
@@ -441,7 +458,7 @@ export async function mistralSearchCompletion(
     const text = await res.text();
     if (res.ok) return parseMistralConversation(JSON.parse(text));
     console.error(`[lume-ai] Mistral search error [${res.status}]: ${text.slice(0, 400)}`);
-    lastErr = `mistral search ${res.status}`;
+    lastErr = `mistral search ${res.status}: ${text.slice(0, 160).replace(/\s+/g, " ")}`;
     if (res.status !== 422) break;
   }
   throw new Error(lastErr);

@@ -229,12 +229,25 @@ export async function chatCompletion(opts: {
       }
     };
 
+    // Cuenta qué proveedor respondió y qué fallaron antes (solo en peticiones con búsqueda web).
+    const tag = (r: ChatResult, name: string): ChatResult => {
+      if (!opts.search) return r;
+      const base =
+        r.searchDiag ??
+        `${name}: ${r.citations.length > 0 ? `búsqueda web (${r.citations.length} páginas)` : "respondió sin consultar páginas"}`;
+      const failures = [xaiError, mistralError, geminiError].filter(Boolean).join(" | ");
+      return { ...r, searchDiag: failures ? `${base}. Fallos previos: ${failures}` : base };
+    };
+
     const geminiFirst = opts.search === true && USE_GEMINI_FOR_SEARCH;
-    const others = geminiFirst ? [tryGemini, tryMistral] : [tryMistral, tryGemini];
-    const providers = opts.preferFast ? [...others, tryXai] : [tryXai, ...others];
-    for (const attempt of providers) {
+    const xai = ["xAI", tryXai] as const;
+    const mistral = ["Mistral", tryMistral] as const;
+    const gemini = ["Gemini", tryGemini] as const;
+    const others = geminiFirst ? [gemini, mistral] : [mistral, gemini];
+    const providers = opts.preferFast ? [...others, xai] : [xai, ...others];
+    for (const [name, attempt] of providers) {
       const result = await attempt();
-      if (result) return result;
+      if (result) return tag(result, name);
     }
     if (!lovableKey && (mistralError || geminiError)) {
       throw new Error([xaiError, mistralError, geminiError].filter(Boolean).join("; "));
@@ -262,7 +275,7 @@ export async function chatCompletion(opts: {
           [xaiError, mistralError, geminiError, `gateway ${res.status}`].filter(Boolean).join("; "),
         );
       }
-      return parseChatJson(res);
+      return tag(await parseChatJson(res), "Pasarela de Lovable");
     }
 
     throw new Error(xaiError ?? "AI is not available in this environment");

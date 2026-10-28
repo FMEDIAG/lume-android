@@ -62,6 +62,8 @@ export type ChatResult = {
   citations: string[];
   /** Qué pasó con la búsqueda web (para mostrarlo mientras se afina). */
   searchDiag?: string;
+  /** Modelo que respondió (solo Mistral, para el diagnóstico). */
+  model?: string;
 };
 
 async function parseChatJson(res: Response): Promise<ChatResult> {
@@ -166,6 +168,7 @@ export async function chatCompletion(opts: {
     };
     let geminiError = null as string | null;
     let mistralError = null as string | null;
+    let mistralSearchError = null as string | null;
     const geminiKey = process.env.GEMINI_API_KEY;
     const mistralKey = process.env.MISTRAL_API_KEY;
 
@@ -184,6 +187,7 @@ export async function chatCompletion(opts: {
           searchFailure = (
             searchErr instanceof Error ? searchErr.message : String(searchErr)
           ).slice(0, 220);
+          mistralSearchError = searchFailure;
           console.error("[lume-ai] Mistral web search failed, using plain chat:", searchErr);
         } finally {
           clearTimeout(searchTimer);
@@ -195,7 +199,7 @@ export async function chatCompletion(opts: {
         return searchFailure
           ? {
               ...plain,
-              searchDiag: `Mistral: la búsqueda web falló (${searchFailure}); tasación sin búsqueda`,
+              searchDiag: `Mistral (${plain.model ?? "?"}): la búsqueda web falló (${searchFailure}); tasación sin búsqueda`,
             }
           : plain;
       } catch (err) {
@@ -235,7 +239,14 @@ export async function chatCompletion(opts: {
       const base =
         r.searchDiag ??
         `${name}: ${r.citations.length > 0 ? `búsqueda web (${r.citations.length} páginas)` : "respondió sin consultar páginas"}`;
-      const failures = [xaiError, mistralError, geminiError].filter(Boolean).join(" | ");
+      const failures = [
+        xaiError,
+        r.searchDiag ? null : mistralSearchError,
+        mistralError,
+        geminiError,
+      ]
+        .filter(Boolean)
+        .join(" | ");
       return { ...r, searchDiag: failures ? `${base}. Fallos previos: ${failures}` : base };
     };
 
@@ -375,6 +386,13 @@ function retryDelayMs(res: Response, attempt: number): number {
   return Math.min(base, 6000);
 }
 
+// Mistral limita qué modelos puede usar cada plan (error 403 "tier_not_allowed"). Se prueba del más
+// capaz al menos y se recuerda cuál no está permitido para no repetir la petición en cada tasación.
+const MISTRAL_HEAVY = ["mistral-large-latest", "mistral-medium-latest"];
+const MISTRAL_SEARCH_LADDER = [...MISTRAL_HEAVY, "mistral-small-latest"];
+const blockedChatModels = new Set<string>();
+const blockedSearchModels = new Set<string>();
+
 // Mistral espera la imagen como texto (URL o data URL) en image_url.
 function toMistralMessages(messages: ChatMessage[]) {
   return messages.map((m) => {
@@ -394,7 +412,7 @@ function toMistralMessages(messages: ChatMessage[]) {
 
 // Lee la respuesta de la API de Conversaciones de Mistral: el texto del modelo y las páginas
 // que la herramienta de búsqueda web ha consultado de verdad.
-export function parseMistralConversation(json: unknown): ChatResult {
+export function parseMistralConversation(json: unknown, model?: string): ChatResult {
   const outputs =
     (json as { outputs?: Array<{ type?: string; content?: unknown }> } | null)?.outputs ?? [];
   let raw = "";
@@ -422,10 +440,11 @@ export function parseMistralConversation(json: unknown): ChatResult {
     throw new Error("mistral search: response is not valid JSON");
   }
   const citations = Array.from(new Set(urls)).slice(0, 8);
+  const who = model ? `Mistral (${model})` : "Mistral";
   const searchDiag = toolUsed
-    ? `Mistral: búsqueda web usada (${citations.length} páginas consultadas)`
-    : "Mistral: respondió sin usar la búsqueda web";
-  return { text, citations, searchDiag };
+    ? `${who}: búsqueda web usada (${citations.length} páginas consultadas)`
+    : `${who}: respondió sin usar la búsqueda web`;
+  return { text, citations, searchDiag, model };
 }
 
 // Mistral con búsqueda web REAL. La API de chat no la incluye; la de Conversaciones (beta) sí,
@@ -444,35 +463,45 @@ export async function mistralSearchCompletion(
     (system ? system + "\n\n" : "") +
     "Before answering, use the web search tool to check recent sales and current prices of comparable items. Reply ONLY with the requested JSON.";
 
-  const base = {
-    model: "mistral-large-latest",
-    inputs,
-    instructions,
-    tools: [{ type: "web_search" }],
-  };
-  // Si la API rechaza algún campo opcional (422), repetimos con el cuerpo mínimo.
-  const bodies = [
-    {
-      ...base,
-      store: false,
-      completion_args: { max_tokens: opts.maxTokens ?? 2200, temperature: 0.2 },
-    },
-    base,
-  ];
+  const models = MISTRAL_SEARCH_LADDER.filter((m) => !blockedSearchModels.has(m));
+  if (models.length === 0) {
+    throw new Error("mistral search 403: ningún modelo permitido por tu plan (recordado)");
+  }
 
   let lastErr = "";
-  for (const body of bodies) {
-    const res = await fetch("https://api.mistral.ai/v1/conversations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-      signal,
-    });
-    const text = await res.text();
-    if (res.ok) return parseMistralConversation(JSON.parse(text));
-    console.error(`[lume-ai] Mistral search error [${res.status}]: ${text.slice(0, 400)}`);
-    lastErr = `mistral search ${res.status}: ${text.slice(0, 160).replace(/\s+/g, " ")}`;
-    if (res.status !== 422) break;
+  for (const model of models) {
+    const base = { model, inputs, instructions, tools: [{ type: "web_search" }] };
+    // Si la API rechaza algún campo opcional (422), repetimos con el cuerpo mínimo.
+    const bodies = [
+      {
+        ...base,
+        store: false,
+        completion_args: { max_tokens: opts.maxTokens ?? 2200, temperature: 0.2 },
+      },
+      base,
+    ];
+    let notAllowed = false;
+    for (const body of bodies) {
+      const res = await fetch("https://api.mistral.ai/v1/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(body),
+        signal,
+      });
+      const text = await res.text();
+      if (res.ok) return parseMistralConversation(JSON.parse(text), model);
+      console.error(
+        `[lume-ai] Mistral search error [${res.status}] (${model}): ${text.slice(0, 400)}`,
+      );
+      lastErr = `mistral search ${model} ${res.status}: ${text.slice(0, 160).replace(/\s+/g, " ")}`;
+      if (res.status === 403) {
+        blockedSearchModels.add(model); // plan sin acceso: probamos el siguiente modelo
+        notAllowed = true;
+        break;
+      }
+      if (res.status !== 422) break;
+    }
+    if (!notAllowed) break; // otro tipo de error: cambiar de modelo no ayuda
   }
   throw new Error(lastErr);
 }
@@ -486,33 +515,51 @@ async function mistralCompletion(
 
   // Modelo grande para tasar; pequeño y barato para tareas ligeras (detección, identificación).
   const light = (opts.maxTokens ?? 2200) <= 700;
-  const body: Record<string, unknown> = {
-    model: light ? "mistral-small-latest" : "mistral-large-latest",
-    messages,
-    max_tokens: opts.maxTokens ?? 2200,
-    temperature: 0.2,
-  };
-  if (opts.json) body.response_format = { type: "json_object" };
+  const ladder = light
+    ? ["mistral-small-latest"]
+    : MISTRAL_HEAVY.filter((m) => !blockedChatModels.has(m));
+  if (ladder.length === 0) {
+    throw new Error(
+      "mistral 403 tier_not_allowed: modelos grande y mediano no permitidos por el plan",
+    );
+  }
 
-  // Ante un límite por minuto (429) o un fallo del servidor (5xx), esperamos y reintentamos.
   let res!: Response;
   let text = "";
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    res = await fetch("https://api.mistral.ai/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-      signal,
-    });
-    text = await res.text();
-    if ((res.status === 429 || res.status >= 500) && attempt < 3) {
-      await sleep(retryDelayMs(res, attempt));
+  let usedModel = ladder[0];
+  for (const model of ladder) {
+    usedModel = model;
+    const body: Record<string, unknown> = {
+      model,
+      messages,
+      max_tokens: opts.maxTokens ?? 2200,
+      temperature: 0.2,
+    };
+    if (opts.json) body.response_format = { type: "json_object" };
+
+    // Ante un límite por minuto (429) o un fallo del servidor (5xx), esperamos y reintentamos.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(body),
+        signal,
+      });
+      text = await res.text();
+      if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+        await sleep(retryDelayMs(res, attempt));
+        continue;
+      }
+      break;
+    }
+    if (!light && res.status === 403 && /tier_not_allowed/i.test(text)) {
+      blockedChatModels.add(model); // el plan no permite este modelo: pasamos al siguiente
       continue;
     }
     break;
   }
   if (!res.ok) {
-    console.error(`[lume-ai] Mistral error [${res.status}]: ${text.slice(0, 400)}`);
+    console.error(`[lume-ai] Mistral error [${res.status}] (${usedModel}): ${text.slice(0, 400)}`);
     let reason = "";
     try {
       const j = JSON.parse(text) as { message?: string; code?: string | number; type?: string };
@@ -535,7 +582,7 @@ async function mistralCompletion(
       : Array.isArray(content)
         ? content.map((c) => c.text ?? "").join("")
         : "";
-  return { text: extractJsonText(raw || "{}"), citations: [] };
+  return { text: extractJsonText(raw || "{}"), citations: [], model: usedModel };
 }
 
 async function geminiCompletion(

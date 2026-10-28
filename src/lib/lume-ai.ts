@@ -60,10 +60,6 @@ type ChatMessage = {
 export type ChatResult = {
   text: string;
   citations: string[];
-  /** Qué pasó con la búsqueda web (para mostrarlo mientras se afina). */
-  searchDiag?: string;
-  /** Modelo que respondió (solo Mistral, para el diagnóstico). */
-  model?: string;
 };
 
 async function parseChatJson(res: Response): Promise<ChatResult> {
@@ -168,13 +164,11 @@ export async function chatCompletion(opts: {
     };
     let geminiError = null as string | null;
     let mistralError = null as string | null;
-    let mistralSearchError = null as string | null;
     const geminiKey = process.env.GEMINI_API_KEY;
     const mistralKey = process.env.MISTRAL_API_KEY;
 
     const tryMistral = async (): Promise<ChatResult | null> => {
       if (!mistralKey) return null;
-      let searchFailure: string | null = null;
       if (opts.search) {
         // La búsqueda tiene su propio límite de tiempo para dejar margen al respaldo.
         const searchCtrl = new AbortController();
@@ -184,10 +178,6 @@ export async function chatCompletion(opts: {
         try {
           return await mistralSearchCompletion(mistralKey, opts, searchCtrl.signal);
         } catch (searchErr) {
-          searchFailure = (
-            searchErr instanceof Error ? searchErr.message : String(searchErr)
-          ).slice(0, 220);
-          mistralSearchError = searchFailure;
           console.error("[lume-ai] Mistral web search failed, using plain chat:", searchErr);
         } finally {
           clearTimeout(searchTimer);
@@ -195,13 +185,7 @@ export async function chatCompletion(opts: {
         }
       }
       try {
-        const plain = await mistralCompletion(mistralKey, opts, controller.signal);
-        return searchFailure
-          ? {
-              ...plain,
-              searchDiag: `Mistral (${plain.model ?? "?"}): la búsqueda web falló (${searchFailure}); tasación sin búsqueda`,
-            }
-          : plain;
+        return await mistralCompletion(mistralKey, opts, controller.signal);
       } catch (err) {
         console.error("[lume-ai] Mistral failed:", err);
         mistralError = err instanceof Error ? err.message : String(err);
@@ -233,32 +217,12 @@ export async function chatCompletion(opts: {
       }
     };
 
-    // Cuenta qué proveedor respondió y qué fallaron antes (solo en peticiones con búsqueda web).
-    const tag = (r: ChatResult, name: string): ChatResult => {
-      if (!opts.search) return r;
-      const base =
-        r.searchDiag ??
-        `${name}: ${r.citations.length > 0 ? `búsqueda web (${r.citations.length} páginas)` : "respondió sin consultar páginas"}`;
-      const failures = [
-        xaiError,
-        r.searchDiag ? null : mistralSearchError,
-        mistralError,
-        geminiError,
-      ]
-        .filter(Boolean)
-        .join(" | ");
-      return { ...r, searchDiag: failures ? `${base}. Fallos previos: ${failures}` : base };
-    };
-
     const geminiFirst = opts.search === true && USE_GEMINI_FOR_SEARCH;
-    const xai = ["xAI", tryXai] as const;
-    const mistral = ["Mistral", tryMistral] as const;
-    const gemini = ["Gemini", tryGemini] as const;
-    const others = geminiFirst ? [gemini, mistral] : [mistral, gemini];
-    const providers = opts.preferFast ? [...others, xai] : [xai, ...others];
-    for (const [name, attempt] of providers) {
+    const others = geminiFirst ? [tryGemini, tryMistral] : [tryMistral, tryGemini];
+    const providers = opts.preferFast ? [...others, tryXai] : [tryXai, ...others];
+    for (const attempt of providers) {
       const result = await attempt();
-      if (result) return tag(result, name);
+      if (result) return result;
     }
     if (!lovableKey && (mistralError || geminiError)) {
       throw new Error([xaiError, mistralError, geminiError].filter(Boolean).join("; "));
@@ -286,7 +250,7 @@ export async function chatCompletion(opts: {
           [xaiError, mistralError, geminiError, `gateway ${res.status}`].filter(Boolean).join("; "),
         );
       }
-      return tag(await parseChatJson(res), "Pasarela de Lovable");
+      return parseChatJson(res);
     }
 
     throw new Error(xaiError ?? "AI is not available in this environment");
@@ -412,7 +376,7 @@ function toMistralMessages(messages: ChatMessage[]) {
 
 // Lee la respuesta de la API de Conversaciones de Mistral: el texto del modelo y las páginas
 // que la herramienta de búsqueda web ha consultado de verdad.
-export function parseMistralConversation(json: unknown, model?: string): ChatResult {
+export function parseMistralConversation(json: unknown): ChatResult {
   const outputs =
     (json as { outputs?: Array<{ type?: string; content?: unknown }> } | null)?.outputs ?? [];
   let raw = "";
@@ -431,7 +395,6 @@ export function parseMistralConversation(json: unknown, model?: string): ChatRes
       }
     }
   }
-  const toolUsed = outputs.some((o) => o.type === "tool.execution");
   if (!raw.trim()) throw new Error("mistral search: empty response");
   const text = extractJsonText(raw);
   try {
@@ -439,12 +402,7 @@ export function parseMistralConversation(json: unknown, model?: string): ChatRes
   } catch {
     throw new Error("mistral search: response is not valid JSON");
   }
-  const citations = Array.from(new Set(urls)).slice(0, 8);
-  const who = model ? `Mistral (${model})` : "Mistral";
-  const searchDiag = toolUsed
-    ? `${who}: búsqueda web usada (${citations.length} páginas consultadas)`
-    : `${who}: respondió sin usar la búsqueda web`;
-  return { text, citations, searchDiag, model };
+  return { text, citations: Array.from(new Set(urls)).slice(0, 8) };
 }
 
 // Mistral con búsqueda web REAL. La API de chat no la incluye; la de Conversaciones (beta) sí,
@@ -489,7 +447,7 @@ export async function mistralSearchCompletion(
         signal,
       });
       const text = await res.text();
-      if (res.ok) return parseMistralConversation(JSON.parse(text), model);
+      if (res.ok) return parseMistralConversation(JSON.parse(text));
       console.error(
         `[lume-ai] Mistral search error [${res.status}] (${model}): ${text.slice(0, 400)}`,
       );
@@ -582,7 +540,7 @@ async function mistralCompletion(
       : Array.isArray(content)
         ? content.map((c) => c.text ?? "").join("")
         : "";
-  return { text: extractJsonText(raw || "{}"), citations: [], model: usedModel };
+  return { text: extractJsonText(raw || "{}"), citations: [] };
 }
 
 async function geminiCompletion(

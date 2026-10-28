@@ -204,9 +204,6 @@ const SCRYFALL_HEADERS = {
 // Cambio aproximado, solo se usa si Scryfall trae precio en una moneda y no en la otra.
 const EUR_PER_USD_APPROX = 0.86;
 
-// Mientras se afina la búsqueda web: añade al final de las notas qué pasó con ella. Poner en false para quitarlo.
-const SHOW_SEARCH_DIAGNOSTIC = true;
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function scryfallGet(url: string): Promise<any | null> {
   const controller = new AbortController();
@@ -807,7 +804,7 @@ export const valuateItem = createServerFn({ method: "POST" })
 
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          const { text, citations, searchDiag } = await chatCompletion({
+          const { text, citations } = await chatCompletion({
             messages: [
               { role: "system", content: data.lang === "es" ? systemEs : systemEn },
               {
@@ -846,16 +843,6 @@ export const valuateItem = createServerFn({ method: "POST" })
           // Precio encontrado de verdad (anuncios o ventas verificados) manda sobre la estimación.
           const anchored = anchorToComparables(parsed, citations, EUR_PER_USD_APPROX, data.lang);
           if (!anchored) parsed = applyBulkFloor(parsed);
-
-          if (SHOW_SEARCH_DIAGNOSTIC && parsed && typeof parsed === "object") {
-            const p = parsed as { notes?: unknown };
-            const diag =
-              searchDiag ??
-              (citations.length > 0
-                ? `búsqueda web: ${citations.length} páginas consultadas`
-                : "sin páginas consultadas por búsqueda web");
-            p.notes = `${typeof p.notes === "string" ? p.notes : ""}\n\n[Diagnóstico] ${diag}${anchored ? "; precio anclado a comparables" : ""}`.slice(0, 4000);
-          }
 
           const result = ResultSchema.safeParse(parsed);
           if (!result.success) {

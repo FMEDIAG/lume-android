@@ -1,29 +1,30 @@
-# Restore valuate.functions.ts
+# Restore valuate.functions.ts + site: multi-query
 
-The full `valuate.functions.ts` (~66KB) could not be pushed in one tool call (payload limit).
+`valuate.functions.ts` is temporarily a stub (tool payload limit on ~66KB files).
+`referenceSites.ts` and `site-search.patch` are already on main.
 
-## Quick restore (app works again)
+## One-shot restore + enable site searches
 
 ```bash
-git fetch origin
+# 1) Restore last good full module
 git checkout dcfb1c818d6fe932985687b47568ed6e186f2d18 -- src/lib/valuate.functions.ts
+
+# 2) Apply site: multi-query patch
+git apply src/lib/site-search.patch
+# if git apply fails, try:
+#   patch -p1 < src/lib/site-search.patch
+
+# 3) Clean up
 git rm -f src/lib/_RESTORE_README.md
-git commit -m "fix: restore valuate.functions.ts from last good commit"
+# optional: keep site-search.patch for history, or remove it
+# git rm -f src/lib/site-search.patch
+
+git add src/lib/valuate.functions.ts
+git commit -m "fix: restore valuate + enable site: multi-query on reference domains"
 git push origin main
 ```
 
-## Then enable site: multi-query (3 edits)
-
-`referenceSites.ts` is already on main.
-
-1. Add import after comparables:
-```ts
-import {
-  buildSiteQueries,
-  formatSiteSearchInstructions,
-} from "@/lib/referenceSites";
-```
-
-2. Replace the `queriesTxt` / `idLine` block with site-query generation (see agent message).
-
-3. Append `+ siteSearchLine` to the userPrompt concatenation after `idLine`.
+After this, each valuation will run mandatory searches like:
+`Rolex Submariner 16610 sold site:ebay.com`
+`Rolex Submariner 16610 site:chrono24.com`
+etc., according to the category map in `referenceSites.ts`.

@@ -217,8 +217,8 @@ export function buildSiteQueries(
   const seen = new Set<string>();
 
   // Reserva siempre una consulta abierta y reparte las variantes entre los sitios.
-  for (const site of sites) {
-    for (const base of bases) {
+  for (const base of bases) {
+    for (const site of sites) {
       if (out.length >= MAX_TOTAL_QUERIES - 1) break;
       const hint = site.soldHint ? ` ${site.soldHint}` : "";
       const q = `${base}${hint} site:${site.domain}`;

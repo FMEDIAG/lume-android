@@ -11,6 +11,7 @@ import {
   type MetalSpots,
 } from "@/lib/lume-ai";
 import { anchorToComparables } from "@/lib/comparables";
+import { buildSiteQueries, formatSiteSearchInstructions, REFERENCE_SITES_BY_CATEGORY } from "@/lib/referenceSites";
 import {
   applyCoinPriceGuards,
   typicalFineWeightG,
@@ -174,6 +175,7 @@ const CoinPriceSchema = z.object({
   notes: z.string().max(4000),
   sources: z.array(z.string().max(200)).max(8),
   comparable: z.string().max(400).optional().default(""),
+  comparables: z.array(z.unknown()).max(12).optional().default([]),
 });
 
 function photoContent(photos: Array<{ dataUrl: string }>, text: string) {
@@ -430,6 +432,7 @@ function isQuotaError(err: unknown): boolean {
 }
 
 const ItemIdSchema = z.object({
+  category: z.string().max(50).catch("other"),
   summary: z.string().max(1500).catch(""),
   searchQueries: z.array(z.string().max(120)).max(4).catch([]),
   missingInfo: z.array(z.string().max(120)).max(5).catch([]),
@@ -441,10 +444,10 @@ type ItemId = z.infer<typeof ItemIdSchema>;
 async function identifyItem(data: z.infer<typeof InputSchema>): Promise<ItemId | null> {
   const es = data.lang === "es";
   const system = es
-    ? `Eres un identificador experto de objetos. Mira las fotos e identifica el objeto con la mayor precisión posible. NO des precio.
+    ? `Eres un identificador experto de objetos. Mira las fotos e identifica el objeto con la mayor precisión posible. NO des precio. El contexto es opcional: ignóralo si contradice las fotos. Devuelve también category, una de estas claves: ${Object.keys(REFERENCE_SITES_BY_CATEGORY).join(", ")}.
 Lee todo el texto visible: marcas, etiquetas, números de serie, sellos, firmas, inscripciones y, en embarcaciones, el nombre del casco y la matrícula. Indica fabricante o autor, modelo, época o año, materiales, dimensiones aproximadas y estado aparente. Si hay varios objetos, céntrate en el de mayor valor probable.
 Devuelve SOLO JSON con: summary (identificación detallada en 2-4 frases, distinguiendo lo que se LEE en la foto de lo que DEDUCES), searchQueries (2-3 consultas cortas para buscar ventas reales de este objeto exacto: modelo, referencia, año), missingInfo (hasta 4 datos que NO se ven en la foto y cambiarían mucho el precio, por ejemplo año de fabricación, horas de motor, metros cuadrados, ubicación, número de serie; lista vacía si no falta ninguno).`
-    : `You are an expert item identifier. Look at the photos and identify the item as precisely as possible. Do NOT give a price.
+    : `You are an expert item identifier. Look at the photos and identify the item as precisely as possible. Do NOT give a price. Context is optional: ignore it if it contradicts the photos. Also return category, one of these keys: ${Object.keys(REFERENCE_SITES_BY_CATEGORY).join(", ")}.
 Read all visible text: brands, labels, serial numbers, hallmarks, signatures, inscriptions and, on boats, the hull name and registration. State maker or author, model, era or year, materials, approximate dimensions and apparent condition. If there are several items, focus on the one with the highest likely value.
 Return ONLY JSON with: summary (detailed identification in 2-4 sentences, separating what you READ in the photo from what you INFER), searchQueries (2-3 short queries to find real sales of this exact item: model, reference, year), missingInfo (up to 4 facts that are NOT visible in the photo and would change the price a lot, for example year of manufacture, engine hours, square metres, location, serial number; empty list if none is missing).`;
 
@@ -615,9 +618,13 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
     2,
   );
 
+  const siteInstructions = formatSiteSearchInstructions(buildSiteQueries([id.searchQuery], "coins", id.title), lang);
+  const comparableInstructions = lang === "es"
+    ? '\nDevuelve también comparables: [{title, price, currency (EUR|USD), kind (sold|asking), url}]. Solo piezas de la misma denominación, año, ceca, grado y autenticidad; no inventes precios ni URLs. El contexto es opcional y se ignora si contradice la foto.'
+    : '\nAlso return comparables: [{title, price, currency (EUR|USD), kind (sold|asking), url}]. Match denomination, year, mint, grade and authenticity; never invent prices or URLs. Context is optional and ignored when it contradicts the photo.';
   const { text, citations } = await chatCompletion({
     messages: [
-      { role: "system", content: system },
+      { role: "system", content: system + siteInstructions + comparableInstructions },
       { role: "user", content: user },
     ],
     json: true,
@@ -657,7 +664,9 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
   if (result.priceEurMax < result.priceEurMin) result.priceEurMax = result.priceEurMin;
   if (result.priceUsdMax < result.priceUsdMin) result.priceUsdMax = result.priceUsdMin;
 
-  const guarded = applyCoinPriceGuards(result, id, spots);
+  const anchored = anchorToComparables(Object.assign(result, { comparables: price.comparables }), citations, spots?.eurPerUsd ?? EUR_PER_USD_APPROX, lang);
+  // Los precios encontrados mandan sobre los suelos genéricos de una serie.
+  const guarded = anchored ? result : applyCoinPriceGuards(result, { ...id, confidence: "low" }, spots);
   return ResultSchema.parse({ ...result, ...guarded });
 }
 
@@ -776,6 +785,13 @@ export const valuateItem = createServerFn({ method: "POST" })
             : `\nCurrent metal spot (MANDATORY, do not invent another): gold ${roundMoney(metalSpots.goldUsd)} USD/troy oz (${roundMoney(metalSpots.goldEur)} EUR/oz), silver ${roundMoney(metalSpots.silverUsd)} USD/oz (${roundMoney(metalSpots.silverEur)} EUR/oz).`;
       }
       const queriesTxt = itemId && itemId.searchQueries.length ? itemId.searchQueries.join(" | ") : "";
+      const referenceCategory = data.category === "auto" || data.category === "other"
+        ? itemId?.category ?? "other"
+        : data.category;
+      const siteInstructions = formatSiteSearchInstructions(
+        buildSiteQueries(itemId?.searchQueries ?? [], referenceCategory, itemId?.summary || "objeto de la fotografía precio mercado"),
+        data.lang,
+      );
       const idLine =
         itemId && itemId.summary
           ? data.lang === "es"
@@ -791,7 +807,11 @@ export const valuateItem = createServerFn({ method: "POST" })
         categoryLine +
         conditionLine +
         metalSpotLine +
-        idLine;
+        idLine +
+        siteInstructions +
+        (data.lang === "es"
+          ? '\nREGLA DE EVIDENCIA: sources contiene solo URLs de páginas realmente consultadas, nunca nombres de webs consultadas conceptualmente. Compara el mismo modelo, edición, material, estado y mercado; excluye lotes, accesorios, réplicas o variantes distintas. Wikipedia y catálogos descriptivos sirven para identificar, no prueban un precio. No inventes dimensiones, kilómetros, autenticidad ni procedencia; el contexto solo prevalece si es coherente. Esta regla prevalece sobre cualquier instrucción anterior contradictoria.'
+          : '\nEVIDENCE RULE: sources contains only URLs of pages actually consulted, never conceptually consulted site names. Match model, edition, material, condition and market; exclude lots, accessories, replicas or different variants. Wikipedia and descriptive catalogues support identification, not price evidence. Do not invent dimensions, mileage, authenticity or provenance; context only overrides guesses when consistent. This rule overrides any conflicting earlier instruction.');
 
       const rangeLineEs =
         "\n\nIMPORTANTE: da SIEMPRE un rango de precio estimado y realista (aunque sea amplio) y usa confianza \"low\" si tienes dudas. No devuelvas precios en 0 y responde solo con el JSON pedido.";

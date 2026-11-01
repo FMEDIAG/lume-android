@@ -172,7 +172,7 @@ function normalizeCategory(category: string | undefined | null): string {
   return c;
 }
 
-function sitesFor(category: string): ReferenceSite[] {
+function sitesFor(category: string | undefined | null): ReferenceSite[] {
   const key = normalizeCategory(category);
   return REFERENCE_SITES_BY_CATEGORY[key] ?? GENERIC_SITES;
 }
@@ -216,10 +216,10 @@ export function buildSiteQueries(
   const out: string[] = [];
   const seen = new Set<string>();
 
-  // Primero: cada base × cada site (prioriza las primeras bases y los primeros sites).
-  for (const base of bases) {
-    for (const site of sites) {
-      if (out.length >= MAX_TOTAL_QUERIES) break;
+  // Reserva siempre una consulta abierta y reparte las variantes entre los sitios.
+  for (const site of sites) {
+    for (const base of bases) {
+      if (out.length >= MAX_TOTAL_QUERIES - 1) break;
       const hint = site.soldHint ? ` ${site.soldHint}` : "";
       const q = `${base}${hint} site:${site.domain}`;
       const key = q.toLowerCase();
@@ -227,7 +227,7 @@ export function buildSiteQueries(
       seen.add(key);
       out.push(q);
     }
-    if (out.length >= MAX_TOTAL_QUERIES) break;
+    if (out.length >= MAX_TOTAL_QUERIES - 1) break;
   }
 
   // También una búsqueda abierta (sin site) de la consulta principal, por si hay fuentes fuera del mapa.

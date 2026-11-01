@@ -72,7 +72,7 @@ export function rangeFromComparables(
 ): ComparableRange | null {
   if (!Number.isFinite(eurPerUsd) || eurPerUsd <= 0) return null;
   const eur = (c: Comparable) => (c.currency === "EUR" ? c.price : c.price * eurPerUsd);
-  // Deux ventes fermes valent mieux qu'un mélange avec des annonces non vendues.
+  // Dos ventas cerradas son preferibles a mezclarlas con anuncios no vendidos.
   const sold = list.filter((c) => c.kind === "sold");
   let used = sold.length >= 2 ? sold : list;
   if (used.length >= 3) {

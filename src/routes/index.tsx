@@ -47,6 +47,7 @@ export const Route = createFileRoute("/")({
           "Lume tasa tus objetos por fotografía usando IA y bases de datos públicas como eBay y Wikipedia. Rangos en EUR y USD, ES/EN.",
       },
       { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: Index,
@@ -262,8 +263,8 @@ function Index() {
             ? "Hay mucha demanda de IA en este momento. Espera un minuto e inténtalo de nuevo."
             : "AI demand is high right now. Please wait a minute and try again."
           : lang === "es"
-            ? "No se pudo completar la tasación. Revisa el contexto o inténtalo de nuevo en unos minutos."
-            : "The valuation could not be completed. Check the context or try again in a few minutes.") +
+            ? "No se pudo completar la tasación. Inténtalo de nuevo en unos minutos; el contexto es opcional."
+            : "The valuation could not be completed. Try again in a few minutes; context is optional.") +
           detail,
       );
     } finally {

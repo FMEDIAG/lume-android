@@ -10,11 +10,18 @@ export type Comparable = {
   url: string;
 };
 
-function hostOf(url: string): string | null {
+/** Identidad de página: no basta compartir dominio con una fuente consultada. */
+function pageOf(url: string): string | null {
   try {
     const u = new URL(url);
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    return u.hostname.replace(/^www\./, "").toLowerCase();
+    u.hash = "";
+    u.hostname = u.hostname.replace(/^www\./, "").toLowerCase();
+    for (const key of [...u.searchParams.keys()]) {
+      if (/^(utm_.+|gclid|fbclid)$/i.test(key)) u.searchParams.delete(key);
+    }
+    u.searchParams.sort();
+    return `${u.hostname}${u.pathname.replace(/\/$/, "")}${u.search}`;
   } catch {
     return null;
   }
@@ -23,19 +30,22 @@ function hostOf(url: string): string | null {
 /** Se queda con los comparables bien formados cuya web figura entre las páginas consultadas. */
 export function verifyComparables(raw: unknown, citationUrls: string[]): Comparable[] {
   if (!Array.isArray(raw)) return [];
-  const hosts = new Set(citationUrls.map(hostOf).filter((h): h is string => !!h));
-  if (hosts.size === 0) return [];
+  const pages = new Set(citationUrls.map(pageOf).filter((p): p is string => !!p));
+  if (pages.size === 0) return [];
   const out: Comparable[] = [];
+  const seen = new Set<string>();
   for (const item of raw.slice(0, 12)) {
     if (!item || typeof item !== "object") continue;
     const c = item as Record<string, unknown>;
     const price = typeof c.price === "number" ? c.price : Number(c.price);
     const currency = c.currency === "EUR" || c.currency === "USD" ? c.currency : null;
-    const kind = c.kind === "sold" ? "sold" : "asking";
+    const kind = c.kind === "sold" || c.kind === "asking" ? c.kind : null;
     const url = typeof c.url === "string" ? c.url : "";
-    const host = hostOf(url);
-    if (!currency || !host || !hosts.has(host)) continue;
+    const page = pageOf(url);
+    if (!currency || !kind || !page || !pages.has(page) || seen.has(page)) continue;
+    if (typeof c.title !== "string" || !c.title.trim() || url.length > 200) continue;
     if (!Number.isFinite(price) || price <= 0 || price > 500_000_000) continue;
+    seen.add(page);
     out.push({
       title: typeof c.title === "string" ? c.title.slice(0, 120) : "",
       price,
@@ -60,8 +70,11 @@ export function rangeFromComparables(
   list: Comparable[],
   eurPerUsd: number,
 ): ComparableRange | null {
+  if (!Number.isFinite(eurPerUsd) || eurPerUsd <= 0) return null;
   const eur = (c: Comparable) => (c.currency === "EUR" ? c.price : c.price * eurPerUsd);
-  let used = list;
+  // Dos ventas cerradas son preferibles a mezclarlas con anuncios no vendidos.
+  const sold = list.filter((c) => c.kind === "sold");
+  let used = sold.length >= 2 ? sold : list;
   if (used.length >= 3) {
     const sorted = used.map(eur).sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)];
@@ -71,10 +84,6 @@ export function rangeFromComparables(
   const values = used.map(eur);
   let lo = Math.min(...values);
   let hi = Math.max(...values);
-  if (hi <= lo) {
-    lo *= 0.9;
-    hi *= 1.1;
-  }
   return { eurMin: lo, eurMax: hi, usdMin: lo / eurPerUsd, usdMax: hi / eurPerUsd, used };
 }
 
@@ -92,9 +101,17 @@ export function anchorToComparables(
 ): boolean {
   if (!parsed || typeof parsed !== "object") return false;
   const p = parsed as Record<string, unknown>;
+  p.sources = Array.from(new Set(citationUrls.filter((url) => pageOf(url) && url.length <= 200))).slice(0, 8);
   const verified = verifyComparables(p.comparables, citationUrls);
   const range = rangeFromComparables(verified, eurPerUsd);
-  if (!range) return false;
+  if (!range) {
+    p.confidence = "low";
+    const warning = lang === "es"
+      ? "Estimación orientativa: no hay al menos dos comparables con páginas verificadas; no es un precio de mercado confirmado."
+      : "Indicative estimate: fewer than two comparables have verified pages; this is not a confirmed market price.";
+    p.notes = `${warning}\n\n${typeof p.notes === "string" ? p.notes : ""}`.slice(0, 4000);
+    return false;
+  }
 
   p.priceEurMin = r2(range.eurMin);
   p.priceEurMax = r2(range.eurMax);
@@ -103,6 +120,7 @@ export function anchorToComparables(
 
   const sold = range.used.filter((c) => c.kind === "sold").length;
   const asking = range.used.length - sold;
+  if (asking > 0 && p.confidence === "high") p.confidence = "medium";
   const line =
     lang === "es"
       ? `Rango calculado a partir de ${range.used.length} comparables encontrados en internet (${sold} vendidos, ${asking} a precio pedido), no de una estimación.`

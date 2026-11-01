@@ -106,16 +106,6 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         content:
           "Lume tasa tus objetos por fotografía usando IA y bases de datos públicas como eBay y Wikipedia. Rangos en EUR y USD, ES/EN.",
       },
-      {
-        property: "og:image",
-        content:
-          "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/9d42ed22-4905-4b42-b194-69aaf1477fe6/id-preview-53886746--1bf1330d-7d1c-439b-b4ff-e88318a70e3f.lovable.[...]",
-      },
-      {
-        name: "twitter:image",
-        content:
-          "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/9d42ed22-4905-4b42-b194-69aaf1477fe6/id-preview-53886746--1bf1330d-7d1c-439b-b4ff-e88318a70e3f.lovable[...]",
-      },
     ],
     links: [
       {

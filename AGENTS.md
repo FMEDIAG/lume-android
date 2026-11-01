@@ -10,3 +10,4 @@
 <!-- LOVABLE:END -->
 
 - Request mobile camera permission only after the first-run introduction CTA, then release the probe stream before opening the camera UI; this preserves Android gesture requirements and avoids holding two streams.
+- Build category-specific reference queries for general and coin valuations; accept comparable pages only when their normalized URLs appear in provider citations, prioritize sold prices, and label unsupported ranges as low-confidence estimates because website names alone are not evidence.

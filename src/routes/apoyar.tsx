@@ -24,6 +24,7 @@ export const Route = createFileRoute("/apoyar")({
         content: "Apoya el proyecto Lume con una donación segura por Liberapay. Support the Lume project with a Liberapay donation.",
       },
       { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: ApoyarPage,

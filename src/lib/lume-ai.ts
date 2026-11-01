@@ -130,7 +130,7 @@ export async function chatCompletion(opts: {
     const tryXai = async (): Promise<ChatResult | null> => {
       if (!xaiKey) return null;
       const searchModes: Array<"web_search" | "live_search" | "search_parameters" | "none"> =
-        opts.search ? ["web_search", "live_search", "search_parameters", "none"] : ["none"];
+        opts.search ? ["web_search", "live_search", "search_parameters"] : ["none"];
 
       let lastErr = "";
       for (const mode of searchModes) {
@@ -220,10 +220,15 @@ export async function chatCompletion(opts: {
     const geminiFirst = opts.search === true && USE_GEMINI_FOR_SEARCH;
     const others = geminiFirst ? [tryGemini, tryMistral] : [tryMistral, tryGemini];
     const providers = opts.preferFast ? [...others, tryXai] : [tryXai, ...others];
+    let ungroundedFallback: ChatResult | null = null;
     for (const attempt of providers) {
       const result = await attempt();
-      if (result) return result;
+      if (!result) continue;
+      if (!opts.search || result.citations.length > 0) return result;
+      // Antes de devolver una estimación sin evidencia, intenta los otros buscadores.
+      ungroundedFallback ??= { ...result, citations: [] };
     }
+    if (ungroundedFallback) return ungroundedFallback;
     if (!lovableKey && (mistralError || geminiError)) {
       throw new Error([xaiError, mistralError, geminiError].filter(Boolean).join("; "));
     }
@@ -482,7 +487,7 @@ async function mistralCompletion(
     );
   }
 
-  let res!: Response;
+  let res: Response | undefined;
   let text = "";
   let usedModel = ladder[0];
   for (const model of ladder) {
@@ -510,12 +515,14 @@ async function mistralCompletion(
       }
       break;
     }
+    if (!res) continue;
     if (!light && res.status === 403 && /tier_not_allowed/i.test(text)) {
       blockedChatModels.add(model); // el plan no permite este modelo: pasamos al siguiente
       continue;
     }
     break;
   }
+  if (!res) throw new Error("mistral: no response");
   if (!res.ok) {
     console.error(`[lume-ai] Mistral error [${res.status}] (${usedModel}): ${text.slice(0, 400)}`);
     let reason = "";

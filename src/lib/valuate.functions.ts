@@ -13,6 +13,17 @@ import {
 import { anchorToComparables } from "@/lib/comparables";
 import { buildSiteQueries, formatSiteSearchInstructions, REFERENCE_SITES_BY_CATEGORY } from "@/lib/referenceSites";
 import {
+  excerptAround,
+  firecrawlSearch,
+  isRetailUrl,
+  mentionsReference,
+  normRef,
+  priceAppearsInText,
+  retailRange,
+  type RetailListing,
+  type SearchPage,
+} from "@/lib/watch-retail";
+import {
   applyCoinPriceGuards,
   typicalFineWeightG,
   type CoinCertifier,
@@ -668,6 +679,163 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
   // Los precios encontrados mandan sobre los suelos genéricos de una serie.
   const guarded = anchored ? result : applyCoinPriceGuards(result, { ...id, confidence: "low" }, spots);
   return ResultSchema.parse({ ...result, ...guarded });
+}
+
+// ============= Relojes: precio de tienda actual con Firecrawl =============
+const WatchIdSchema = z.object({
+  brand: z.coerce.string().max(60).catch(""),
+  model: z.coerce.string().max(120).catch(""),
+  reference: z.coerce.string().max(40).catch(""),
+  referenceCertain: z.boolean().catch(false),
+});
+
+async function fetchEurPerUsd(): Promise<number> {
+  try {
+    const res = await fetch("https://api.frankfurter.app/latest?from=USD&to=EUR");
+    const j = (await res.json()) as { rates?: { EUR?: number } };
+    const r = Number(j.rates?.EUR);
+    return Number.isFinite(r) && r > 0 ? r : EUR_PER_USD_APPROX;
+  } catch {
+    return EUR_PER_USD_APPROX;
+  }
+}
+
+async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<ValuationResult> {
+  const es = data.lang === "es";
+  const today = new Date().toISOString().slice(0, 10);
+  const idSystem = es
+    ? `Identifica el reloj de las fotos. Lee la REFERENCIA exacta (esfera, caja, fondo, cierre, etiqueta) o tómala del contexto del usuario si es coherente con la foto. NO la supongas por el aspecto: si no la lees con seguridad, devuelve referenceCertain=false. Devuelve SOLO JSON {brand, model, reference, referenceCertain}.`
+    : `Identify the watch in the photos. Read the EXACT reference (dial, case, caseback, clasp, tag) or take it from the user context if consistent with the photo. Do NOT guess it from looks: if you cannot read it with certainty, return referenceCertain=false. Return ONLY JSON {brand, model, reference, referenceCertain}.`;
+  const { text } = await chatCompletion({
+    messages: [
+      { role: "system", content: idSystem },
+      {
+        role: "user",
+        content: photoContent(data.photos, (es ? "Contexto: " : "Context: ") + (data.context || "(none)")),
+      },
+    ],
+    json: true,
+    timeoutMs: 25_000,
+    maxTokens: 400,
+    preferFast: true,
+  });
+  let id: z.infer<typeof WatchIdSchema>;
+  try {
+    id = WatchIdSchema.parse(JSON.parse(text));
+  } catch {
+    id = { brand: "", model: "", reference: "", referenceCertain: false };
+  }
+  const name = [id.brand, id.model].filter(Boolean).join(" ").trim() || (es ? "Reloj" : "Watch");
+
+  const noData = (notes: string): ValuationResult => ({
+    title: `${name}${id.reference ? ` ${id.reference}` : ""}`.slice(0, 200),
+    identification: name,
+    priceEurMin: 0,
+    priceEurMax: 0,
+    priceUsdMin: 0,
+    priceUsdMax: 0,
+    confidence: "low",
+    notes: notes.slice(0, 4000),
+    sources: [],
+  });
+
+  if (!id.referenceCertain || normRef(id.reference).length < 4) {
+    return noData(
+      es
+        ? `No puedo leer con seguridad la referencia exacta del reloj, así que no doy un precio para no suponerla. Escribe la referencia en el contexto (está en el fondo de la caja, entre las asas, en la garantía o en la caja original) o sube una foto donde se lea, y vuelve a tasar.`
+        : `I cannot read the exact watch reference with certainty, so I will not give a price based on a guess. Type the reference in the context (it is on the caseback, between the lugs, on the warranty card or original box) or upload a photo where it is readable, and try again.`,
+    );
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  let pages: SearchPage[] = [];
+  try {
+    const queries = [
+      `${id.brand} ${id.reference} precio tienda nuevo`,
+      `${id.brand} ${id.reference} price buy new authorized dealer`,
+    ];
+    const results = await Promise.allSettled(queries.map((q) => firecrawlSearch(q, controller.signal)));
+    const seen = new Set<string>();
+    for (const r of results) {
+      if (r.status !== "fulfilled") continue;
+      for (const p of r.value) {
+        if (seen.has(p.url) || !isRetailUrl(p.url)) continue;
+        if (!mentionsReference(p.title + " " + p.markdown, id.reference)) continue;
+        seen.add(p.url);
+        pages.push(p);
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+  pages = pages.slice(0, 8);
+
+  const notFound = es
+    ? `Referencia identificada: ${id.brand} ${id.reference}. No he encontrado anuncios actuales de tiendas o distribuidores para esta referencia exacta (consulta del ${today}), así que no hay datos fiables para dar un precio de tienda.`
+    : `Identified reference: ${id.brand} ${id.reference}. I found no current store or dealer listings for this exact reference (checked ${today}), so there is no reliable data for a retail price.`;
+  if (pages.length === 0) return noData(notFound);
+
+  const extractSystem = es
+    ? `Para cada página, extrae el precio de venta ACTUAL del reloj NUEVO con referencia exacta "${id.reference}" en esa tienda. Ignora precios de segunda mano, usados, de otras referencias, cuotas mensuales y precios tachados. Si la página no muestra ese precio, omítela. Copia el importe tal como aparece. Devuelve SOLO JSON {"listings":[{"index":n,"store":"...","price":número,"currency":"EUR"|"USD"}]}.`
+    : `For each page, extract the CURRENT selling price of the NEW watch with exact reference "${id.reference}" at that store. Ignore pre-owned, used, other references, monthly instalments and struck-through prices. If the page shows no such price, omit it. Copy the amount as shown. Return ONLY JSON {"listings":[{"index":n,"store":"...","price":number,"currency":"EUR"|"USD"}]}.`;
+  const excerpts = pages.map((p, i) => ({ i, text: excerptAround(p.markdown, id.reference) }));
+  const pagesText = excerpts
+    .map((e) => `### [${e.i}] ${pages[e.i].title}\n${pages[e.i].url}\n${e.text}`)
+    .join("\n\n");
+  const ex = await chatCompletion({
+    messages: [
+      { role: "system", content: extractSystem },
+      { role: "user", content: pagesText },
+    ],
+    json: true,
+    timeoutMs: 25_000,
+    maxTokens: 800,
+    preferFast: true,
+  });
+  let rawListings: Array<{ index?: unknown; store?: unknown; price?: unknown; currency?: unknown }> = [];
+  try {
+    const j = JSON.parse(ex.text) as { listings?: unknown };
+    if (Array.isArray(j.listings)) rawListings = j.listings as typeof rawListings;
+  } catch {
+    /* sin datos */
+  }
+  const listings: RetailListing[] = [];
+  for (const l of rawListings) {
+    const idx = Number(l.index);
+    const page = pages[idx];
+    const price = toNumberLoose(l.price);
+    const currency = String(l.currency).toUpperCase() === "USD" ? "USD" : "EUR";
+    if (!page || !(price > 0)) continue;
+    // Solo aceptamos importes que aparecen de verdad en la página consultada.
+    if (!priceAppearsInText(excerpts[idx].text, price)) continue;
+    listings.push({ url: page.url, title: String(l.store || page.title).slice(0, 80), price, currency });
+  }
+  const eurPerUsd = await fetchEurPerUsd();
+  const range = retailRange(listings, eurPerUsd);
+  if (!range) return noData(notFound);
+
+  const lines = listings
+    .map((l) => `• ${l.title}: ${formatAmount(l.price)} ${l.currency}`)
+    .join("\n");
+  const notes = es
+    ? `Precio de tienda actual (nuevo, en distribuidores/boutiques), no de segunda mano. Referencia: ${id.brand} ${id.reference}. Consulta realizada el ${today} en ${listings.length} anuncio(s):\n${lines}`
+    : `Current retail price (new, at dealers/boutiques), not pre-owned. Reference: ${id.brand} ${id.reference}. Checked on ${today} across ${listings.length} listing(s):\n${lines}`;
+  return ResultSchema.parse({
+    title: `${name} ${id.reference}`.slice(0, 200),
+    identification: `${name} — ref. ${id.reference}`,
+    priceEurMin: range.eurMin,
+    priceEurMax: range.eurMax,
+    priceUsdMin: range.usdMin,
+    priceUsdMax: range.usdMax,
+    confidence: listings.length >= 3 ? "high" : "medium",
+    notes,
+    sources: Array.from(new Set(listings.map((l) => l.url.slice(0, 200)))).slice(0, 8),
+  });
+}
+
+function formatAmount(n: number): string {
+  return Math.round(n).toLocaleString("es-ES");
 }
 
 const systemEs = `Eres un tasador experto que consulta bases de datos públicas de todo el mundo (eBay sold listings, Wikipedia, Catawiki, WorthPoint, Heritage Auctions, Chrono24, Discogs, etc.). Analiza las fotos y devuelve una tasación honesta con rangos de precio realistas en EUR y USD. REGLA SOBRE EL CONTEXTO DEL USUARIO: es opcional y solo una pista. La tasación se basa SIEMPRE en las fotos y en lo que encuentres en internet; nunca falles, te bloquees ni devuelvas un error por culpa del contexto. Si el contexto es coherente con las fotos, úsalo para afinar (marca, año, ubicación, m², estado); si es confuso, contradictorio, incompleto o claramente erróneo, ignóralo por completo y tasa solo con las fotos y tus fuentes, sin mencionar el problema en "notes" salvo que sea relevante para el precio. Si no puedes identificar el objeto con seguridad, da igualmente tu mejor estimación: indica la duda en "notes", usa confianza "low" y devuelve SIEMPRE un rango de precio estimado y realista (aunque sea amplio) basado en lo que se ve y en objetos parecidos; el usuario puede añadir contexto opcional para afinarlo. No devuelvas precios en 0 por falta de certeza. Para cartas coleccionables (Magic: The Gathering, Pokémon, Yu-Gi-Oh, deportes, etc.) IDENTIFICA CON PRECISIÓN la edición/set exacto usando el símbolo de expansión, el número de colección, el año, el idioma, el borde (blanco/negro), foil/no-foil y el estado (NM/LP/MP/HP/DMG). Consulta referencias específicas (Scryfall, MTGGoldfish, TCGPlayer, Cardmarket para Magic; TCGPlayer/PriceCharting para Pokémon) y considera TODAS las ediciones posibles antes de dar el precio. Usa el rango de céntimos (ej. 0.02 - 0.10 EUR/USD) SOLO si estás seguro de que la carta u objeto coleccionable es común y de valor muy bajo (bulk). Si la carta es de una edición reciente, o no la reconoces con certeza, NO uses ese suelo: busca su precio actual en Scryfall o Cardmarket y usa el precio de mercado de la edición exacta, no el de la más barata. Indica en "notes" la edición identificada y menciona alternativas si hay duda. Para VEHÍCULOS A MOTOR (categoría vehicles: coches, motocicletas, vehículos históricos, furgonetas, camiones ligeros, etc.) identifica marca, modelo, generación aproximada, motorización, kilometraje aparente y estado visual. Consulta referencias como eBay sold listings, Mobile.de, Autoscout24, Classic.com, Bring a Trailer y Hemmings; ajusta por mercado europeo (EUR) y estadounidense (USD). Para embarcaciones (categoría boats: yates, megayates, veleros, lanchas, barcos de pesca, jet skis, neumáticas, etc.) NO apliques suelos ni techos artificiales: un yate de 40-60 m vale decenas de millones de euros y uno de más de 100 m, cientos de millones. Identifica PRIMERO astillero, modelo y serie exactos (lee el nombre del casco, la matrícula y las inscripciones), eslora (cuidado: no confundas pies con metros), año de construcción o de la última gran refit, motorización y horas de motor, y equipamiento visible. Si es un modelo de serie conocido, busca el precio real de unidades del MISMO modelo y año (YachtWorld, Boat International, SuperYacht Times, YachtBuyer, Burgess, Camper & Nicholsons, Boat Trader, Annonces du Bateau) y distingue ventas cerradas de precios pedidos. Si el precio es "bajo consulta" (POA), NO lo inventes: estima por comparables de eslora, edad y astillero similares y usa confianza "medium" o "low". En un yate nuevo o casi nuevo parte del precio de catálogo o de construcción; en uno usado aplica la depreciación real de su edad. Muestra en "notes" el modelo identificado, la eslora usada, 2-3 comparables con su precio y el cálculo. El contexto del usuario sobre astillero, modelo, eslora, año y horas de motor prevalece sobre lo que deduzcas de la foto. Para INSTRUMENTOS MUSICALES (categoría music instrument: guitarras, bajos, violines, violas, chelos, pianos, vientos, baterías, sintetizadores, amplificadores) identifica PRIMERO marca, modelo, año y país de fabricación (usa el número de serie, la etiqueta interior, la pala del mástil y las inscripciones), el acabado y si es original o ha sido reparado, retocado o con piezas cambiadas. En instrumentos de gama alta o antiguos pesan más el origen, el año y la originalidad que el modelo: un mismo modelo puede valer varias veces más según la época. Busca el precio real de ventas de unidades del MISMO modelo y año (Reverb, Thomann, eBay sold listings, Tarisio Cozio para instrumentos de cuerda frotada, y Christie's, Sotheby's o Bonhams para piezas excepcionales) y distingue el precio pedido del vendido. En violines, violas, chelos y arcos de autor, sin certificado de autenticidad trátalos como instrumento de taller o "de estilo" y baja la confianza. Muestra en "notes" el modelo identificado, el año estimado y 2-3 comparables con su precio. Para INMUEBLES (categoría realestate: pisos, casas, villas, chalets, locales, terrenos, edificios) NO apliques suelos de céntimos ni techos artificiales: estima el valor de mercado real, que puede ser de cientos de miles a decenas de millones de euros. Calcula SIEMPRE el precio como superficie × precio/m² de la microzona, antes de ajustar por estado y singularidad. El contexto del usuario sobre ubicación, m² y tipología prevalece sobre cualquier inferencia visual; no reduzcas la superficie indicada. Distingue estrictamente un apartamento pequeño de una residencia de 3+ dormitorios, dúplex, planta completa o >150 m². Si faltan m², estima un intervalo de superficie coherente y calcula ambos extremos. Para lujo usa comparables de Idealista, Fotocasa, Sotheby's Realty, Christie's Real Estate y Engel & Völkers; no limites el resultado a 1.000.000 € y explica en "notes" superficie, horquilla €/m², primas y cálculo final. Para BONSÁIS (categoría bonsai) identifica especie, estilo (chokkan, moyogi, kengai, forest, etc.), edad aproximada por grosor de tronco y nebari, calidad de la ramificación y estado de salud visible; ten en cuenta si la maceta es de autor (Tokoname, Yixing) y súmala aparte si es apreciable. Consulta Bonsai Empire, viveros y subastas especializadas, y eBay sold listings; los precios van desde 20-30 € en material de partida hasta varios miles en ejemplares de estilo maduro. Para VINO Y LICORES (categoría wine) identifica productor, denominación de origen o región, añada, formato de botella y estado de conservación (nivel de llenado, etiqueta, cápsula, corcho); consulta Wine-Searcher, iDealwine, Vinfolio y casas como Sotheby's/Christie's Wine o Whisky Auctioneer para licores. Para MUEBLES ANTIGUOS (categoría furniture) identifica estilo y época (Isabelino, Luis XV, Art Déco, medio siglo, etc.), material, posibles marcas de ebanista o taller, y estado/restauraciones; consulta Catawiki, 1stDibs, Invaluable y los departamentos de mobiliario de Christie's/Sotheby's. Para MILITARIA (categoría militaria) identifica conflicto/época, país, unidad y tipo de pieza (medalla, insignia, uniforme, documento), y sé explícito si parece una reproducción moderna en vez de una pieza original, ya que el precio varía drásticamente; consulta Hermann Historica, Bonhams Arms & Militaria y eBay sold listings. Para BOLSOS Y COMPLEMENTOS DE LUJO (categoría luxury bags) identifica marca, modelo, línea, materiales, herrajes y posibles indicios de autenticidad (calidad de costuras, sellado, número de serie visible); consulta Vestiaire Collective, The RealReal, Fashionphile, Rebag y los departamentos de bolsos de Christie's/Sotheby's. Para MINERALES Y ROCAS (categoría minerals) identifica especie mineral, hábito cristalino, color y transparencia, procedencia probable del yacimiento y tamaño estimado; consulta Mindat.org, MineralAuctions, eBay sold listings y Catawiki. Para GEMAS Y PIEDRAS PRECIOSAS SUELTAS (categoría gemstones) identifica tipo de gema, corte, color, transparencia y posible origen; el peso en quilates es determinante y si no es visible indícalo como limitación; consulta Opal Auctions (para ópalos), GemVal, GIA (Gemological Institute of America), eBay sold listings y Catawiki. Para RELOJES (categoría watches) identifica PRIMERO marca, modelo y REFERENCIA exacta (léela en la esfera, la caja, el cierre y el fondo; si es dudosa, dilo), el calibre si se ve y, sobre todo, el MATERIAL de la caja y la pulsera: oro macizo (18K/750), bicolor, chapado en oro (GP) o acero. El mismo modelo en oro macizo puede valer varias veces más que en acero, y un reloj de oro de una marca de lujo puede valer decenas de miles de euros o más: no apliques un suelo bajo ni lo tases como un reloj de gama media sin motivo. Valora además año o serie, estado, si conserva esfera, corona, manecillas y pulsera originales (piezas cambiadas o repintadas bajan mucho el precio), pulidos excesivos, caja y papeles originales y revisiones. Busca el precio real de unidades de la MISMA referencia (Chrono24, WatchCharts, eBay sold listings y casas como Phillips, Christie's, Sotheby's o Antiquorum) y distingue el precio pedido del vendido. Si no puedes leer la referencia, explica la duda en \"notes\" y amplía el rango con confianza \"low\" en vez de inventar un modelo. Muestra en \"notes\" la referencia identificada, el material y 2-3 comparables con su precio. Para JOYERÍA (categoría jewelry) busca SIEMPRE el contraste/sello de ley grabado (750/18K, 585/14K, 417/10K, 375/9K = oro macizo; 925/plata de ley; 950/platino) frente a marcas de CHAPADO/BAÑO (GP, "gold filled", "gold plated", "chapado", "baño de oro", "plaqué", "vermeil"): son mundos de valor completamente distintos. Si es oro/plata MACIZO, calcula el valor de fundición con la cotización real proporcionada (peso estimado en gramos × ley × precio del metal) y súmale una prima si hay marca reconocida, diseño de autor, gemas engastadas o antigüedad — la fundición es el SUELO, no el precio final si hay valor añadido. Si es CHAPADO/DE BAÑO, el metal precioso es una capa mínima: NO calcules fundición sobre el peso total, tasa la pieza como bisutería fina según marca, diseño y estado. Ante duda razonable entre macizo y chapado, indícalo explícitamente en "notes" y usa confidence "low" o "medium" en vez de asumir macizo.

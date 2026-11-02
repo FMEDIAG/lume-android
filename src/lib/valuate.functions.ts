@@ -916,6 +916,10 @@ export const valuateItem = createServerFn({ method: "POST" })
         }
       }
 
+      if (data.category === "watches") {
+        return await valuateWatchRetail(data);
+      }
+
       const categoryLine =
         data.category && data.category !== "auto"
           ? data.lang === "es"

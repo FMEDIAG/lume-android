@@ -1,0 +1,118 @@
+// Relojes: precio de TIENDA actual (distribuidor / boutique), nunca segunda mano.
+// Flujo: leer la referencia exacta → buscar con Firecrawl anuncios de tiendas → extraer
+// precios solo de páginas consultadas de verdad → calcular rango. Sin datos fiables, no hay cifra.
+
+const GATEWAY = "https://connector-gateway.lovable.dev/firecrawl/v2";
+
+// Mercados de segunda mano, subastas y agregadores: no son precio de tienda.
+const SECOND_HAND_RE =
+  /(ebay\.|wallapop|vinted|milanuncios|catawiki|watchcharts|chrono24|subito\.|kleinanzeigen|leboncoin|todocoleccion|reddit\.|forum|youtube\.|instagram\.|facebook\.|pinterest\.|wikipedia\.|watchuseek|hodinkee\.com\/articles|bobswatches|crownandcaliber|watchfinder|liveauctioneers|invaluable|sothebys|christies|phillips\.com|bonhams|heritage)/i;
+const USED_TEXT_RE = /\b(pre-?owned|second[- ]hand|segunda mano|usado|used|vintage|ocasi[oó]n)\b/i;
+
+export function normRef(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** La página menciona la referencia exacta (ignorando espacios, guiones y puntos). */
+export function mentionsReference(text: string, reference: string): boolean {
+  const ref = normRef(reference);
+  if (ref.length < 4) return false;
+  return normRef(text).includes(ref);
+}
+
+export function isRetailUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (!/^https?:$/.test(u.protocol)) return false;
+    return !SECOND_HAND_RE.test(u.hostname + u.pathname);
+  } catch {
+    return false;
+  }
+}
+
+/** ¿Aparece ese importe escrito en la página? Evita precios inventados por el modelo. */
+export function priceAppearsInText(text: string, price: number): boolean {
+  if (!(price > 0)) return false;
+  const digits = text.replace(/[^\d]/g, " ");
+  const whole = String(Math.round(price));
+  const compact = text.replace(/[.,'\s\u00a0\u202f]/g, "");
+  return compact.includes(whole) || digits.includes(whole);
+}
+
+export type RetailListing = {
+  url: string;
+  title: string;
+  price: number;
+  currency: "EUR" | "USD";
+};
+
+export function retailRange(
+  listings: RetailListing[],
+  eurPerUsd: number,
+): { eurMin: number; eurMax: number; usdMin: number; usdMax: number } | null {
+  const eur = listings
+    .map((l) => (l.currency === "EUR" ? l.price : l.price * eurPerUsd))
+    .filter((n) => n > 0)
+    .sort((a, b) => a - b);
+  if (eur.length === 0) return null;
+  // Descarta extremos claramente fuera de la mediana (errores de página o variantes).
+  const med = eur[Math.floor(eur.length / 2)];
+  const kept = eur.filter((n) => n >= med * 0.6 && n <= med * 1.6);
+  const eurMin = Math.round(kept[0]);
+  const eurMax = Math.round(kept[kept.length - 1]);
+  return {
+    eurMin,
+    eurMax,
+    usdMin: Math.round(eurMin / eurPerUsd),
+    usdMax: Math.round(eurMax / eurPerUsd),
+  };
+}
+
+export type SearchPage = { url: string; title: string; markdown: string };
+
+export async function firecrawlSearch(query: string, signal: AbortSignal): Promise<SearchPage[]> {
+  const lovableKey = process.env.LOVABLE_API_KEY;
+  const fcKey = process.env.FIRECRAWL_API_KEY;
+  if (!lovableKey || !fcKey) throw new Error("firecrawl not configured");
+  const res = await fetch(`${GATEWAY}/search`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${lovableKey}`,
+      "X-Connection-Api-Key": fcKey,
+    },
+    body: JSON.stringify({
+      query,
+      limit: 8,
+      scrapeOptions: { formats: ["markdown"], onlyMainContent: true },
+    }),
+    signal,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`[watch-retail] Firecrawl search [${res.status}]: ${body.slice(0, 300)}`);
+    throw new Error(`firecrawl ${res.status}`);
+  }
+  const json = (await res.json()) as {
+    data?: unknown;
+  };
+  const raw = Array.isArray(json.data)
+    ? json.data
+    : ((json.data as { web?: unknown[] } | undefined)?.web ?? []);
+  return (raw as Array<Record<string, unknown>>)
+    .map((r) => ({
+      url: String(r.url ?? (r.metadata as { sourceURL?: string } | undefined)?.sourceURL ?? ""),
+      title: String(r.title ?? (r.metadata as { title?: string } | undefined)?.title ?? ""),
+      markdown: String(r.markdown ?? r.description ?? ""),
+    }))
+    .filter((p) => p.url);
+}
+
+/** Recorta la página alrededor de las menciones de la referencia, para el extractor. */
+export function excerptAround(markdown: string, reference: string, max = 2500): string {
+  const ref = reference.toLowerCase();
+  const lower = markdown.toLowerCase();
+  const idx = lower.indexOf(ref);
+  const start = Math.max(0, (idx >= 0 ? idx : 0) - 600);
+  return markdown.slice(start, start + max);
+}

@@ -20,6 +20,27 @@ export function mentionsReference(text: string, reference: string): boolean {
   return normRef(text).includes(ref);
 }
 
+/**
+ * Referencia escrita por el usuario en el contexto (p. ej. "Q169242J", "126610LN", "5711/1A-010").
+ * Solo acepta códigos con letras y números mezclados, o un número tras "ref"/"referencia".
+ * Descarta años, fechas, quilates, medidas e importes.
+ */
+export function referenceFromContext(context: string): string | null {
+  const tokens = (context || "").split(/[\s,;:()"\u201c\u201d]+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i].replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "");
+    if (t.length < 4 || t.length > 20 || !/\d/.test(t)) continue;
+    if (/^\d{4}$/.test(t)) continue; // años
+    if (/^\d+([.,]\d+)?(k|kt|mm|cm|g|gr|m|eur|usd)$/i.test(t)) continue; // 18k, 41mm, 65000eur
+    const prev = (tokens[i - 1] ?? "").toLowerCase().replace(/[^a-z]/g, "");
+    const afterLabel = /^(ref|referencia|reference|modelo)$/.test(prev) && /^\d{4,}$/.test(t);
+    if (afterLabel) return t;
+    if (/^[\d.,\-\/]+$/.test(t)) continue; // fechas, importes, decimales
+    if (/[A-Za-z]/.test(t)) return t; // mezcla de letras y números
+  }
+  return null;
+}
+
 export function isRetailUrl(url: string): boolean {
   try {
     const u = new URL(url);

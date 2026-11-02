@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isRetailUrl, mentionsReference, priceAppearsInText, retailRange } from "./watch-retail";
+import {
+  isRetailUrl,
+  mentionsReference,
+  priceAppearsInText,
+  referenceFromContext,
+  retailRange,
+} from "./watch-retail";
 
 describe("watch retail", () => {
   it("rechaza mercados de segunda mano", () => {
@@ -17,5 +23,15 @@ describe("watch retail", () => {
   });
   it("sin anuncios no hay cifra", () => {
     expect(retailRange([], 0.9)).toBeNull();
+  });
+  it("toma la referencia escrita en el contexto", () => {
+    expect(referenceFromContext("Jaeger-LeCoultre Master Ultra Thin Tourbillon Moon Q169242J")).toBe("Q169242J");
+    expect(referenceFromContext("Rolex Submariner 126610LN, oro 18k, 41mm, año 2020")).toBe("126610LN");
+    expect(referenceFromContext("Patek 5711/1A-010 completo")).toBe("5711/1A-010");
+    expect(referenceFromContext("ref 116500 caja y papeles")).toBe("116500");
+  });
+  it("no confunde años, quilates, fechas ni importes con una referencia", () => {
+    expect(referenceFromContext("oro 18k 41mm 65.000 € comprado en 2020 el 2026-11-02")).toBeNull();
+    expect(referenceFromContext("")).toBeNull();
   });
 });

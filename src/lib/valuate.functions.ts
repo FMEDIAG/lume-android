@@ -15,6 +15,7 @@ import { buildSiteQueries, formatSiteSearchInstructions, REFERENCE_SITES_BY_CATE
 import {
   excerptAround,
   firecrawlSearch,
+  referenceFromContext,
   isRetailUrl,
   mentionsReference,
   normRef,
@@ -725,6 +726,9 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Va
   } catch {
     id = { brand: "", model: "", reference: "", referenceCertain: false };
   }
+  // Si el usuario escribió la referencia en el contexto, manda sobre lo que lea la IA.
+  const userRef = referenceFromContext(data.context);
+  if (userRef) id = { ...id, reference: userRef, referenceCertain: true };
   const name = [id.brand, id.model].filter(Boolean).join(" ").trim() || (es ? "Reloj" : "Watch");
 
   const noData = (notes: string): ValuationResult => ({
@@ -750,12 +754,14 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Va
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30_000);
   let pages: SearchPage[] = [];
+  let searchFailed = false;
   try {
     const queries = [
       `${id.brand} ${id.reference} precio tienda nuevo`,
       `${id.brand} ${id.reference} price buy new authorized dealer`,
     ];
     const results = await Promise.allSettled(queries.map((q) => firecrawlSearch(q, controller.signal)));
+    searchFailed = results.every((r) => r.status === "rejected");
     const seen = new Set<string>();
     for (const r of results) {
       if (r.status !== "fulfilled") continue;
@@ -774,7 +780,10 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Va
   const notFound = es
     ? `Referencia identificada: ${id.brand} ${id.reference}. No he encontrado anuncios actuales de tiendas o distribuidores para esta referencia exacta (consulta del ${today}), así que no hay datos fiables para dar un precio de tienda.`
     : `Identified reference: ${id.brand} ${id.reference}. I found no current store or dealer listings for this exact reference (checked ${today}), so there is no reliable data for a retail price.`;
-  if (pages.length === 0) return noData(notFound);
+  const serviceDown = es
+    ? `Referencia identificada: ${id.brand} ${id.reference}. No he podido consultar las tiendas (el servicio de búsqueda no responde, no está conectado o no tiene créditos), así que no doy precio. Inténtalo de nuevo más tarde.`
+    : `Identified reference: ${id.brand} ${id.reference}. I could not query the stores (the search service is not responding, not connected or out of credits), so I give no price. Please try again later.`;
+  if (pages.length === 0) return noData(searchFailed ? serviceDown : notFound);
 
   const extractSystem = es
     ? `Para cada página, extrae el precio de venta ACTUAL del reloj NUEVO con referencia exacta "${id.reference}" en esa tienda. Ignora precios de segunda mano, usados, de otras referencias, cuotas mensuales y precios tachados. Si la página no muestra ese precio, omítela. Copia el importe tal como aparece. Devuelve SOLO JSON {"listings":[{"index":n,"store":"...","price":número,"currency":"EUR"|"USD"}]}.`

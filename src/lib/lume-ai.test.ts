@@ -32,6 +32,7 @@ describe("evidence-first latency", () => {
 
   it("preserves the existing non-search fallback when the option is absent", async () => {
     vi.stubEnv("XAI_API_KEY", "");
+    vi.stubEnv("GEMINI_API_KEY", "");
     vi.stubEnv("MISTRAL_API_KEY", "test");
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response("Unavailable", { status: 503 }))

@@ -180,7 +180,7 @@ export async function chatCompletion(opts: {
         try {
           return await mistralSearchCompletion(mistralKey, opts, searchCtrl.signal);
         } catch (searchErr) {
-          console.error("[lume-ai] Mistral web search failed, using plain chat:", searchErr);
+          console.error("[lume-ai] Mistral web search failed:", searchErr);
         } finally {
           clearTimeout(searchTimer);
           controller.signal.removeEventListener("abort", onAbort);

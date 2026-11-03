@@ -582,10 +582,14 @@ function Index() {
                 <Heart className="h-4 w-4" /> {t.donate}
               </Link>
               <img
-                src="/fmediag-logo.png"
+                src="/fmediag-logo.webp"
                 alt="FMEDIAG"
+                width={36}
+                height={36}
+                decoding="async"
                 className="mx-auto mt-3 h-9 w-9 rounded-full ring-1 ring-primary/30"
               />
+
               <p className="mt-2 text-center text-xs font-bold text-muted-foreground/80">
                 ©2026 FMEDIAG - Lume v1.0
               </p>

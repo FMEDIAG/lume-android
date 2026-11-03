@@ -1,4 +1,5 @@
 # Tasaciones con evidencia real
+- [x] Reducir esperas innecesarias en tasaciones generales y relojes, sin cambiar monedas ni Magic; 27 pruebas pasan y tasación real sin contexto comprobada (62 s, estimación sin evidencia por límites del buscador).
 - [x] Corregir consultas por categoría y verificación de comparables.
 - [x] Aplicar la evidencia a tasación general y numismática sin impedir tasar sin contexto.
 - [x] Añadir pruebas y verificar una tasación real sin contexto (resultado orientativo, sin errores de pantalla).

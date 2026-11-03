@@ -116,6 +116,8 @@ export async function chatCompletion(opts: {
   maxTokens?: number;
   /** Tareas ligeras (clasificar, identificar): prueba antes los modelos pequeños y deja xAI como último recurso. */
   preferFast?: boolean;
+  /** En el flujo general, busca evidencia antes de generar una estimación sin búsqueda. */
+  evidenceFirst?: boolean;
 }): Promise<ChatResult> {
   const timeoutMs = opts.timeoutMs ?? 45_000;
   const xaiKey = process.env.XAI_API_KEY;
@@ -183,6 +185,7 @@ export async function chatCompletion(opts: {
           clearTimeout(searchTimer);
           controller.signal.removeEventListener("abort", onAbort);
         }
+        if (opts.evidenceFirst) return null;
       }
       try {
         return await mistralCompletion(mistralKey, opts, controller.signal);
@@ -202,7 +205,7 @@ export async function chatCompletion(opts: {
         geminiError = geminiErr instanceof Error ? geminiErr.message : String(geminiErr);
         // Cuota agotada (a menudo la de búsqueda web): probamos sin búsqueda antes de rendirnos.
         // La tasación sale menos precisa, pero sale.
-        if (opts.search && /429|RESOURCE_EXHAUSTED/i.test(geminiError)) {
+        if (opts.search && !opts.evidenceFirst && /429|RESOURCE_EXHAUSTED/i.test(geminiError)) {
           try {
             console.error("[lume-ai] Retrying Gemini without web search");
             return await geminiCompletion(geminiKey, { ...opts, search: false }, controller.signal);

@@ -692,7 +692,10 @@ const WatchIdSchema = z.object({
 
 async function fetchEurPerUsd(): Promise<number> {
   try {
-    const res = await fetch("https://api.frankfurter.app/latest?from=USD&to=EUR");
+    const res = await fetch("https://api.frankfurter.app/latest?from=USD&to=EUR", {
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return EUR_PER_USD_APPROX;
     const j = (await res.json()) as { rates?: { EUR?: number } };
     const r = Number(j.rates?.EUR);
     return Number.isFinite(r) && r > 0 ? r : EUR_PER_USD_APPROX;
@@ -792,7 +795,8 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Va
   const pagesText = excerpts
     .map((e) => `### [${e.i}] ${pages[e.i].title}\n${pages[e.i].url}\n${e.text}`)
     .join("\n\n");
-  const ex = await chatCompletion({
+  // La conversión y la extracción no dependen entre sí: no sumar otra espera al final.
+  const [ex, eurPerUsd] = await Promise.all([chatCompletion({
     messages: [
       { role: "system", content: extractSystem },
       { role: "user", content: pagesText },
@@ -801,7 +805,7 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Va
     timeoutMs: 25_000,
     maxTokens: 800,
     preferFast: true,
-  });
+  }), fetchEurPerUsd()]);
   let rawListings: Array<{ index?: unknown; store?: unknown; price?: unknown; currency?: unknown }> = [];
   try {
     const j = JSON.parse(ex.text) as { listings?: unknown };
@@ -820,7 +824,6 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Va
     if (!priceAppearsInText(excerpts[idx].text, price)) continue;
     listings.push({ url: page.url, title: String(l.store || page.title).slice(0, 80), price, currency });
   }
-  const eurPerUsd = await fetchEurPerUsd();
   const range = retailRange(listings, eurPerUsd);
   if (!range) return noData(notFound);
 
@@ -1018,6 +1021,9 @@ export const valuateItem = createServerFn({ method: "POST" })
             ],
             json: true,
             search: true,
+            // No generar otra respuesta sin búsqueda antes de probar el siguiente buscador.
+            // Monedas y Magic conservan sus llamadas y su comportamiento actuales.
+            evidenceFirst: true,
             timeoutMs: attempt === 1 ? 60_000 : 40_000,
             maxTokens: 2200,
           });
@@ -1069,6 +1075,12 @@ export const valuateItem = createServerFn({ method: "POST" })
             return withMissingInfo(zeroFallback, itemId, data.lang);
           }
           if (isQuotaError(attemptErr)) break;
+          // Un fallo de red/servicio no se arregla repitiendo toda la tasación (hasta 40 s más).
+          // Solo corregimos respuestas recibidas con JSON o campos inválidos.
+          if (!(attemptErr instanceof Error) || ![
+            "Model did not return valid JSON",
+            "Valuation service returned an unexpected response",
+          ].includes(attemptErr.message)) break;
         }
       }
       throw lastErr;

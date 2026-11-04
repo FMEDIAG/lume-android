@@ -715,7 +715,9 @@ async function fetchEurPerUsd(): Promise<number> {
   }
 }
 
-async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<ValuationResult> {
+type WatchRetailOutcome = { result: ValuationResult | null; hint?: string };
+
+async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<WatchRetailOutcome> {
   const es = data.lang === "es";
   const today = new Date().toISOString().slice(0, 10);
   const idSystem = es
@@ -745,23 +747,19 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Va
   if (userRef) id = { ...id, reference: userRef, referenceCertain: true };
   const name = [id.brand, id.model].filter(Boolean).join(" ").trim() || (es ? "Reloj" : "Watch");
 
-  const noData = (notes: string): ValuationResult => ({
-    title: `${name}${id.reference ? ` ${id.reference}` : ""}`.slice(0, 200),
-    identification: name,
-    priceEurMin: 0,
-    priceEurMax: 0,
-    priceUsdMin: 0,
-    priceUsdMax: 0,
-    confidence: "low",
-    notes: notes.slice(0, 4000),
-    sources: [],
-  });
+  // "Tasa siempre": sin precio de tienda fiable no devolvemos ceros — pasamos al
+  // flujo general con una nota que explica el motivo y pide un valor orientativo.
+  const fallBack = (reason: string, hint: string): WatchRetailOutcome => {
+    console.error(`[valuateItem] watch retail: ${reason}`);
+    return { result: null, hint };
+  };
 
   if (!id.referenceCertain || normRef(id.reference).length < 4) {
-    return noData(
+    return fallBack(
+      "reference not read with certainty",
       es
-        ? `No puedo leer con seguridad la referencia exacta del reloj, así que no doy un precio para no suponerla. Escribe la referencia en el contexto (está en el fondo de la caja, entre las asas, en la garantía o en la caja original) o sube una foto donde se lea, y vuelve a tasar.`
-        : `I cannot read the exact watch reference with certainty, so I will not give a price based on a guess. Type the reference in the context (it is on the caseback, between the lugs, on the warranty card or original box) or upload a photo where it is readable, and try again.`,
+        ? `Nota del sistema: no se pudo leer la referencia exacta del reloj con certeza, así que no hay precio de tienda de distribuidor. Tasa igualmente: da tu mejor estimación basada en las fotos y en búsquedas reales en la web, con confianza "low" y un rango amplio si hace falta; en "notes" indica marca y modelo probable y pide la referencia exacta (fondo de la caja, entre las asas, garantía) para poder dar el precio de tienda nuevo en un nuevo intento.`
+        : `System note: the exact watch reference could not be read with certainty, so there is no dealer retail price. Still appraise it: give your best estimate from the photos and real web searches, with "low" confidence and a wide range if needed; in "notes" state the likely brand and model and ask for the exact reference (caseback, between the lugs, warranty card) so a new attempt can return the retail price.`,
     );
   }
 
@@ -791,13 +789,17 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Va
   }
   pages = pages.slice(0, 8);
 
-  const notFound = es
-    ? `Referencia identificada: ${id.brand} ${id.reference}. No he encontrado anuncios actuales de tiendas o distribuidores para esta referencia exacta (consulta del ${today}), así que no hay datos fiables para dar un precio de tienda.`
-    : `Identified reference: ${id.brand} ${id.reference}. I found no current store or dealer listings for this exact reference (checked ${today}), so there is no reliable data for a retail price.`;
-  const serviceDown = es
-    ? `Referencia identificada: ${id.brand} ${id.reference}. No he podido consultar las tiendas (el servicio de búsqueda no responde, no está conectado o no tiene créditos), así que no doy precio. Inténtalo de nuevo más tarde.`
-    : `Identified reference: ${id.brand} ${id.reference}. I could not query the stores (the search service is not responding, not connected or out of credits), so I give no price. Please try again later.`;
-  if (pages.length === 0) return noData(searchFailed ? serviceDown : notFound);
+  const notFoundHint = es
+    ? `Nota del sistema: la búsqueda en tiendas y distribuidores no encontró anuncios actuales de la referencia exacta ${id.brand} ${id.reference} (consulta del ${today}), así que no hay precio de tienda nuevo fiable. Tasa igualmente con un valor orientativo basado en ventas y anuncios reales que encuentres en la web (mercado de segunda mano u ofertas equivalentes), con confianza "low" o "medium", y aclara en "notes" que no es el precio de tienda nuevo. No cites fuentes que no hayas consultado y no inventes precios.`
+    : `System note: the store search found no current listings for exact reference ${id.brand} ${id.reference} (checked ${today}), so there is no reliable new retail price. Still appraise it with an indicative value based on real sales and listings you find on the web (pre-owned market or equivalent offers), with "low" or "medium" confidence, and clarify in "notes" that it is not the new retail price. Never cite sources you did not consult and never invent prices.`;
+  const serviceDownHint = es
+    ? `Nota del sistema: no se han podido consultar las tiendas y distribuidores (el servicio de búsqueda no responde, no está conectado o no tiene créditos), así que no hay precio de tienda nuevo. Tasa igualmente con tu mejor estimación orientativa a partir de las fotos y lo que encuentres en la web, con confianza "low", y aclara en "notes" que la consulta de tiendas falló y se puede reintentar. No cites fuentes que no hayas consultado.`
+    : `System note: the store and dealer lookup failed (the search service is not responding, not connected or out of credits), so there is no new retail price. Still appraise it with your best indicative estimate from the photos and whatever you find on the web, with "low" confidence, and clarify in "notes" that the store lookup failed and can be retried. Never cite sources you did not consult.`;
+  if (pages.length === 0) {
+    return searchFailed
+      ? fallBack(`search service unavailable for reference ${id.reference}`, serviceDownHint)
+      : fallBack(`no retail listings for reference ${id.reference}`, notFoundHint);
+  }
 
   const extractSystem = es
     ? `Para cada página, extrae el precio de venta ACTUAL del reloj NUEVO con referencia exacta "${id.reference}" en esa tienda. Ignora precios de segunda mano, usados, de otras referencias, cuotas mensuales y precios tachados. Si la página no muestra ese precio, omítela. Copia el importe tal como aparece. Devuelve SOLO JSON {"listings":[{"index":n,"store":"...","price":número,"currency":"EUR"|"USD"}]}.`
@@ -836,7 +838,7 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Va
     listings.push({ url: page.url, title: String(l.store || page.title).slice(0, 80), price, currency });
   }
   const range = retailRange(listings, eurPerUsd);
-  if (!range) return noData(notFound);
+  if (!range) return fallBack(`no extractable retail prices for reference ${id.reference}`, notFoundHint);
 
   const lines = listings
     .map((l) => `• ${l.title}: ${formatAmount(l.price)} ${l.currency}`)
@@ -844,7 +846,7 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Va
   const notes = es
     ? `Precio de tienda actual (nuevo, en distribuidores/boutiques), no de segunda mano. Referencia: ${id.brand} ${id.reference}. Consulta realizada el ${today} en ${listings.length} anuncio(s):\n${lines}`
     : `Current retail price (new, at dealers/boutiques), not pre-owned. Reference: ${id.brand} ${id.reference}. Checked on ${today} across ${listings.length} listing(s):\n${lines}`;
-  return ResultSchema.parse({
+  return { result: ResultSchema.parse({
     title: `${name} ${id.reference}`.slice(0, 200),
     identification: `${name} — ref. ${id.reference}`,
     priceEurMin: range.eurMin,
@@ -854,7 +856,7 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Va
     confidence: listings.length >= 3 ? "high" : "medium",
     notes,
     sources: Array.from(new Set(listings.map((l) => l.url.slice(0, 200)))).slice(0, 8),
-  });
+  }) };
 }
 
 function formatAmount(n: number): string {
@@ -939,8 +941,16 @@ export const valuateItem = createServerFn({ method: "POST" })
         }
       }
 
+      let watchHint: string | undefined;
       if (data.category === "watches") {
-        return await valuateWatchRetail(data);
+        try {
+          const outcome = await valuateWatchRetail(data);
+          if (outcome.result) return outcome.result;
+          watchHint = outcome.hint;
+        } catch (watchErr) {
+          console.error("[valuateItem] watch retail lookup failed, using general flow:", watchErr);
+          if (isQuotaError(watchErr)) throw watchErr;
+        }
       }
 
       const categoryLine =
@@ -987,6 +997,7 @@ export const valuateItem = createServerFn({ method: "POST" })
         buildSiteQueries([...buildFichaQueries(itemId?.ficha), ...(itemId?.searchQueries ?? [])], referenceCategory, itemId?.summary || "objeto de la fotografía precio mercado"),
         data.lang,
       );
+      const watchLine = watchHint ? `\n${watchHint}` : "";
       const idLine =
         itemId && itemId.summary
           ? data.lang === "es"
@@ -1004,6 +1015,7 @@ export const valuateItem = createServerFn({ method: "POST" })
         metalSpotLine +
         idLine +
         siteInstructions +
+        watchLine +
         (data.lang === "es"
           ? '\nREGLA DE EVIDENCIA: sources contiene solo URLs de páginas realmente consultadas, nunca nombres de webs consultadas conceptualmente. Compara el mismo modelo, edición, material, estado y mercado; excluye lotes, accesorios, réplicas o variantes distintas. Wikipedia y catálogos descriptivos sirven para identificar, no prueban un precio. No inventes dimensiones, kilómetros, autenticidad ni procedencia; el contexto solo prevalece si es coherente. Esta regla prevalece sobre cualquier instrucción anterior contradictoria.'
           : '\nEVIDENCE RULE: sources contains only URLs of pages actually consulted, never conceptually consulted site names. Match model, edition, material, condition and market; exclude lots, accessories, replicas or different variants. Wikipedia and descriptive catalogues support identification, not price evidence. Do not invent dimensions, mileage, authenticity or provenance; context only overrides guesses when consistent. This rule overrides any conflicting earlier instruction.');

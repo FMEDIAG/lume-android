@@ -699,6 +699,7 @@ const WatchIdSchema = z.object({
   model: z.coerce.string().max(120).catch(""),
   reference: z.coerce.string().max(40).catch(""),
   referenceCertain: z.boolean().catch(false),
+  description: z.coerce.string().max(700).catch(""),
 });
 
 async function fetchEurPerUsd(): Promise<number> {
@@ -721,8 +722,8 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Wa
   const es = data.lang === "es";
   const today = new Date().toISOString().slice(0, 10);
   const idSystem = es
-    ? `Identifica el reloj de las fotos. Lee la REFERENCIA exacta (esfera, caja, fondo, cierre, etiqueta) o tómala del contexto del usuario si es coherente con la foto. NO la supongas por el aspecto: si no la lees con seguridad, devuelve referenceCertain=false. Devuelve SOLO JSON {brand, model, reference, referenceCertain}.`
-    : `Identify the watch in the photos. Read the EXACT reference (dial, case, caseback, clasp, tag) or take it from the user context if consistent with the photo. Do NOT guess it from looks: if you cannot read it with certainty, return referenceCertain=false. Return ONLY JSON {brand, model, reference, referenceCertain}.`;
+    ? `Identifica el reloj de las fotos. Lee la REFERENCIA exacta (esfera, caja, fondo, cierre, etiqueta) o tómala del contexto del usuario si es coherente con la foto. NO la supongas por el aspecto: si no la lees con seguridad, devuelve referenceCertain=false. Añade "description": una descripción de 2-3 frases de lo que SE VE (tipo de reloj, marca, modelo, material de la caja, esfera, complicaciones visibles y correa o pulsera). En "description" NO incluyas la referencia, números de serie ni códigos de caja, y no afirmes el estado, la caja ni los papeles. Devuelve SOLO JSON {brand, model, reference, referenceCertain, description}.`
+    : `Identify the watch in the photos. Read the EXACT reference (dial, case, caseback, clasp, tag) or take it from the user context if consistent with the photo. Do NOT guess it from looks: if you cannot read it with certainty, return referenceCertain=false. Add "description": a 2-3 sentence description of what is VISIBLE (watch type, brand, model, case material, dial, visible complications and strap or bracelet). In "description" do NOT include the reference, serial numbers or case codes, and do not claim condition, box or papers. Return ONLY JSON {brand, model, reference, referenceCertain, description}.`;
   const { text } = await chatCompletion({
     messages: [
       { role: "system", content: idSystem },
@@ -733,14 +734,14 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Wa
     ],
     json: true,
     timeoutMs: 25_000,
-    maxTokens: 400,
+    maxTokens: 600,
     preferFast: true,
   });
   let id: z.infer<typeof WatchIdSchema>;
   try {
     id = WatchIdSchema.parse(JSON.parse(text));
   } catch {
-    id = { brand: "", model: "", reference: "", referenceCertain: false };
+    id = { brand: "", model: "", reference: "", referenceCertain: false, description: "" };
   }
   // Si el usuario escribió la referencia en el contexto, manda sobre lo que lea la IA.
   const userRef = referenceFromContext(data.context);
@@ -840,21 +841,17 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Wa
   const range = retailRange(listings, eurPerUsd);
   if (!range) return fallBack(`no extractable retail prices for reference ${id.reference}`, notFoundHint);
 
-  const lines = listings
-    .map((l) => `• ${l.title}: ${formatAmount(l.price)} ${l.currency}`)
-    .join("\n");
-  const notes = es
-    ? `Precio de tienda actual (nuevo, en distribuidores/boutiques), no de segunda mano. Referencia: ${id.brand} ${id.reference}. Consulta realizada el ${today} en ${listings.length} anuncio(s):\n${lines}`
-    : `Current retail price (new, at dealers/boutiques), not pre-owned. Reference: ${id.brand} ${id.reference}. Checked on ${today} across ${listings.length} listing(s):\n${lines}`;
   return { result: ResultSchema.parse({
     title: `${name} ${id.reference}`.slice(0, 200),
-    identification: `${name} — ref. ${id.reference}`,
+    identification: id.description.trim()
+      ? `${id.description.trim()} ${es ? "Referencia" : "Reference"}: ${id.reference}.`
+      : `${name} — ref. ${id.reference}`,
     priceEurMin: range.eurMin,
     priceEurMax: range.eurMax,
     priceUsdMin: range.usdMin,
     priceUsdMax: range.usdMax,
     confidence: listings.length >= 3 ? "high" : "medium",
-    notes,
+    notes: "",
     sources: Array.from(new Set(listings.map((l) => l.url.slice(0, 200)))).slice(0, 8),
   }) };
 }

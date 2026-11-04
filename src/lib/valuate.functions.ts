@@ -11,7 +11,7 @@ import {
   type MetalSpots,
 } from "@/lib/lume-ai";
 import { anchorToComparables } from "@/lib/comparables";
-import { buildSiteQueries, formatSiteSearchInstructions, REFERENCE_SITES_BY_CATEGORY } from "@/lib/referenceSites";
+import { buildFichaQueries, buildSiteQueries, formatSiteSearchInstructions, REFERENCE_SITES_BY_CATEGORY } from "@/lib/referenceSites";
 import {
   excerptAround,
   firecrawlSearch,

@@ -19,3 +19,13 @@ describe("búsqueda por referencias", () => {
     assert.ok(buildSiteQueries([], null, "Reloj fotografiado").length > 0);
   });
 });
+import { buildFichaQueries } from "./referenceSites";
+describe("buildFichaQueries", () => {
+  it("pone primero la consulta con todos los datos exactos", () => {
+    const q = buildFichaQueries({ maker: "Fender", model: "Stratocaster", reference: "", year: "1974" });
+    expect(q[0]).toBe("Fender Stratocaster 1974");
+  });
+  it("sin fabricante, modelo ni referencia no inventa consultas", () => {
+    expect(buildFichaQueries({ year: "1974", material: "madera" })).toEqual([]);
+  });
+});

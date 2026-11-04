@@ -11,7 +11,7 @@ import {
   type MetalSpots,
 } from "@/lib/lume-ai";
 import { anchorToComparables } from "@/lib/comparables";
-import { buildSiteQueries, formatSiteSearchInstructions, REFERENCE_SITES_BY_CATEGORY } from "@/lib/referenceSites";
+import { buildFichaQueries, buildSiteQueries, formatSiteSearchInstructions, REFERENCE_SITES_BY_CATEGORY } from "@/lib/referenceSites";
 import {
   excerptAround,
   firecrawlSearch,
@@ -448,6 +448,17 @@ const ItemIdSchema = z.object({
   summary: z.string().max(1500).catch(""),
   searchQueries: z.array(z.string().max(120)).max(4).catch([]),
   missingInfo: z.array(z.string().max(120)).max(5).catch([]),
+  ficha: z
+    .object({
+      maker: z.coerce.string().max(80).catch(""),
+      model: z.coerce.string().max(80).catch(""),
+      reference: z.coerce.string().max(80).catch(""),
+      year: z.coerce.string().max(30).catch(""),
+      edition: z.coerce.string().max(80).catch(""),
+      material: z.coerce.string().max(80).catch(""),
+    })
+    .partial()
+    .catch({}),
 });
 type ItemId = z.infer<typeof ItemIdSchema>;
 
@@ -458,10 +469,10 @@ async function identifyItem(data: z.infer<typeof InputSchema>): Promise<ItemId |
   const system = es
     ? `Eres un identificador experto de objetos. Mira las fotos e identifica el objeto con la mayor precisión posible. NO des precio. El contexto es opcional: ignóralo si contradice las fotos. Devuelve también category, una de estas claves: ${Object.keys(REFERENCE_SITES_BY_CATEGORY).join(", ")}.
 Lee todo el texto visible: marcas, etiquetas, números de serie, sellos, firmas, inscripciones y, en embarcaciones, el nombre del casco y la matrícula. Indica fabricante o autor, modelo, época o año, materiales, dimensiones aproximadas y estado aparente. Si hay varios objetos, céntrate en el de mayor valor probable.
-Devuelve SOLO JSON con: summary (identificación detallada en 2-4 frases, distinguiendo lo que se LEE en la foto de lo que DEDUCES), searchQueries (2-3 consultas cortas para buscar ventas reales de este objeto exacto: modelo, referencia, año), missingInfo (hasta 4 datos que NO se ven en la foto y cambiarían mucho el precio, por ejemplo año de fabricación, horas de motor, metros cuadrados, ubicación, número de serie; lista vacía si no falta ninguno).`
+Devuelve SOLO JSON con: summary (identificación detallada en 2-4 frases, distinguiendo lo que se LEE en la foto de lo que DEDUCES), searchQueries (2-3 consultas cortas para buscar ventas reales de este objeto exacto: modelo, referencia, año), missingInfo (hasta 4 datos que NO se ven en la foto y cambiarían mucho el precio, por ejemplo año de fabricación, horas de motor, metros cuadrados, ubicación, número de serie; lista vacía si no falta ninguno), ficha (como la ficha de una moneda: {maker, model, reference, year, edition, material}; rellena cada campo SOLO si se lee en la foto o se identifica con seguridad, si no déjalo "" — nunca inventes referencias ni números).`
     : `You are an expert item identifier. Look at the photos and identify the item as precisely as possible. Do NOT give a price. Context is optional: ignore it if it contradicts the photos. Also return category, one of these keys: ${Object.keys(REFERENCE_SITES_BY_CATEGORY).join(", ")}.
 Read all visible text: brands, labels, serial numbers, hallmarks, signatures, inscriptions and, on boats, the hull name and registration. State maker or author, model, era or year, materials, approximate dimensions and apparent condition. If there are several items, focus on the one with the highest likely value.
-Return ONLY JSON with: summary (detailed identification in 2-4 sentences, separating what you READ in the photo from what you INFER), searchQueries (2-3 short queries to find real sales of this exact item: model, reference, year), missingInfo (up to 4 facts that are NOT visible in the photo and would change the price a lot, for example year of manufacture, engine hours, square metres, location, serial number; empty list if none is missing).`;
+Return ONLY JSON with: summary (detailed identification in 2-4 sentences, separating what you READ in the photo from what you INFER), searchQueries (2-3 short queries to find real sales of this exact item: model, reference, year), missingInfo (up to 4 facts that are NOT visible in the photo and would change the price a lot, for example year of manufacture, engine hours, square metres, location, serial number; empty list if none is missing), ficha (like a coin's record: {maker, model, reference, year, edition, material}; fill each field ONLY if read in the photo or identified with certainty, otherwise "" — never invent references or numbers).`;
 
   const category =
     data.category && data.category !== "auto"
@@ -973,7 +984,7 @@ export const valuateItem = createServerFn({ method: "POST" })
         ? itemId?.category ?? "other"
         : data.category;
       const siteInstructions = formatSiteSearchInstructions(
-        buildSiteQueries(itemId?.searchQueries ?? [], referenceCategory, itemId?.summary || "objeto de la fotografía precio mercado"),
+        buildSiteQueries([...buildFichaQueries(itemId?.ficha), ...(itemId?.searchQueries ?? [])], referenceCategory, itemId?.summary || "objeto de la fotografía precio mercado"),
         data.lang,
       );
       const idLine =

@@ -270,3 +270,39 @@ export function formatSiteSearchInstructions(
 export function referenceDomainsFor(category: string | undefined | null): string[] {
   return sitesFor(category).map((s) => s.domain);
 }
+
+/** Ficha exacta del objeto (como la de las monedas): solo datos leídos o identificados con seguridad. */
+export type ItemFicha = {
+  maker?: string;
+  model?: string;
+  reference?: string;
+  year?: string;
+  edition?: string;
+  material?: string;
+};
+
+/**
+ * Consultas de búsqueda construidas con los datos exactos de la ficha, igual que las monedas
+ * buscan por país + denominación + año + ceca. La más específica va primero.
+ */
+export function buildFichaQueries(f: ItemFicha | null | undefined): string[] {
+  if (!f) return [];
+  const clean = (s?: string) => (s ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+  const maker = clean(f.maker);
+  const model = clean(f.model);
+  const ref = clean(f.reference);
+  const year = clean(f.year);
+  const edition = clean(f.edition);
+  const material = clean(f.material);
+  const core = [maker, model].filter(Boolean).join(" ");
+  if (!core && !ref) return [];
+  const out = [
+    [core, ref, year, edition].filter(Boolean).join(" "),
+    [core, ref].filter(Boolean).join(" "),
+    [core, year || material].filter(Boolean).join(" "),
+  ];
+  const seen = new Set<string>();
+  return out
+    .map((q) => q.slice(0, 100))
+    .filter((q) => q.length >= 3 && !seen.has(q.toLowerCase()) && seen.add(q.toLowerCase()));
+}

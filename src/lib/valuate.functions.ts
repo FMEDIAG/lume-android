@@ -13,6 +13,8 @@ import {
 import { anchorToComparables } from "@/lib/comparables";
 import { buildFichaQueries, buildSiteQueries, formatSiteSearchInstructions, REFERENCE_SITES_BY_CATEGORY } from "@/lib/referenceSites";
 import {
+  cleanWatchIdentification,
+  trimNotes,
   isPreOwnedSourceUrl,
   excerptAround,
   firecrawlSearch,
@@ -1108,7 +1110,11 @@ export const valuateItem = createServerFn({ method: "POST" })
         buildSiteQueries([...buildFichaQueries(itemId?.ficha), ...(itemId?.searchQueries ?? [])], referenceCategory, itemId?.summary || "objeto de la fotografía precio mercado"),
         data.lang,
       );
-      const watchLine = watchHint ? `\n${watchHint}` : "";
+      const watchStyleRules =
+        data.lang === "es"
+          ? '\nReglas de redacción para este reloj: en "identification" describe solo lo que se VE; no afirmes que la referencia es exacta si no está escrita en la foto o en el contexto (di "probable"), no indiques el estado, la caja ni los papeles, y no incluyas modelos alternativos. En "notes" escribe como máximo dos frases cortas: que no es precio de tienda nuevo y de dónde sale el rango; no repitas la identificación ni pidas datos al usuario.'
+          : '\nWriting rules for this watch: in "identification" describe only what is VISIBLE; do not claim the reference is exact unless it is written in the photo or the context (say "probable"), do not state condition, box or papers, and do not list alternative models. In "notes" write at most two short sentences: that it is not a new retail price and where the range comes from; do not repeat the identification or ask the user for data.';
+      const watchLine = watchHint ? `\n${watchHint}${watchStyleRules}` : "";
       const idLine =
         itemId && itemId.summary
           ? data.lang === "es"
@@ -1139,17 +1145,17 @@ export const valuateItem = createServerFn({ method: "POST" })
       const finish = (r: ValuationResult): ValuationResult => {
         const hasLink = r.sources.some((s) => /^https?:\/\//i.test(s));
         const flagged =
-          watchHint && !hasLink
+          watchHint
             ? {
                 ...r,
-                confidence: "low" as const,
-                notes: `${
-                  data.lang === "es"
-                    ? "Estimación sin fuentes verificadas: no se han podido consultar anuncios reales de este reloj."
-                    : "Estimate without verified sources: no real listings of this watch could be checked."
-                }\n\n${r.notes}`
-                  .trim()
-                  .slice(0, 4000),
+                identification: cleanWatchIdentification(
+                  r.identification,
+                  !!itemId && itemId.ficha?.reference === "",
+                ),
+                notes: hasLink
+                  ? trimNotes(r.notes)
+                  : `${data.lang === "es" ? "Estimación sin fuentes verificadas." : "Estimate without verified sources."} ${trimNotes(r.notes, 380)}`.trim(),
+                ...(hasLink ? {} : { confidence: "low" as const }),
               }
             : r;
         return withMissingInfo(flagged, itemId, data.lang);

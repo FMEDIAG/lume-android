@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   isPreOwnedSourceUrl,
+  cleanWatchIdentification,
   isRetailUrl,
   mentionsReference,
   priceAppearsInText,
   referenceFromContext,
   retailRange,
+  trimNotes,
 } from "./watch-retail";
 
 describe("watch retail", () => {
@@ -40,5 +42,19 @@ describe("watch retail", () => {
     expect(isPreOwnedSourceUrl("https://www.ebay.com/itm/123")).toBe(true);
     expect(isPreOwnedSourceUrl("https://www.reddit.com/r/Watches/comments/x")).toBe(false);
     expect(isPreOwnedSourceUrl("https://www.youtube.com/watch?v=abc")).toBe(false);
+  });
+  it("limpia la identificación: sin estado, sin alternativas y sin llamar exacta a una referencia dudosa", () => {
+    const raw =
+      "Reloj Seiko 5 Sports, referencia exacta SRPD53K1 (o SBSA003). Caja de acero. Estado aparente: Impecable / Mint.";
+    const out = cleanWatchIdentification(raw, true);
+    expect(out).toBe("Reloj Seiko 5 Sports, referencia probable SRPD53K1. Caja de acero.");
+    expect(cleanWatchIdentification(raw, false)).toContain("referencia exacta SRPD53K1");
+  });
+  it("acorta notas largas en el final de una frase", () => {
+    const long = "Primera frase corta. ".repeat(40);
+    const out = trimNotes(long, 120);
+    expect(out.length).toBeLessThanOrEqual(120);
+    expect(out.endsWith(".")).toBe(true);
+    expect(trimNotes("Nota breve.", 120)).toBe("Nota breve.");
   });
 });

@@ -66,6 +66,32 @@ export function isPreOwnedSourceUrl(url: string): boolean {
   }
 }
 
+/** Acorta unas notas largas sin cortar a mitad de frase. */
+export function trimNotes(text: string, max = 420): string {
+  const s = (text || "").trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const idx = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf(".\n"));
+  return idx > 80 ? cut.slice(0, idx + 1) : `${cut.trimEnd()}…`;
+}
+
+/**
+ * Limpia la identificación de un reloj sin precio de tienda: quita el estado aparente (no se ve
+ * en una foto), las referencias alternativas entre paréntesis y, si la referencia no está
+ * confirmada, no la llama "exacta".
+ */
+export function cleanWatchIdentification(text: string, referenceUncertain: boolean): string {
+  let s = (text || "")
+    .replace(/\s*(Estado aparente|Apparent condition|Estado|Condition)\s*:[^.\n]*\.?/gi, "")
+    .replace(/\s*\((o|or)\s+[A-Za-z0-9][A-Za-z0-9.\-\/ ]{3,24}\)/g, "");
+  if (referenceUncertain) {
+    s = s
+      .replace(/referencia exacta/gi, "referencia probable")
+      .replace(/exact reference/gi, "probable reference");
+  }
+  return s.replace(/\s{2,}/g, " ").trim();
+}
+
 /** ¿Aparece ese importe escrito en la página? Evita precios inventados por el modelo. */
 export function priceAppearsInText(text: string, price: number): boolean {
   if (!(price > 0)) return false;

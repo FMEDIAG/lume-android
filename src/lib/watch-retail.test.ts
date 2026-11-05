@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isPreOwnedSourceUrl,
   isRetailUrl,
   mentionsReference,
   priceAppearsInText,
@@ -33,5 +34,11 @@ describe("watch retail", () => {
   it("no confunde años, quilates, fechas ni importes con una referencia", () => {
     expect(referenceFromContext("oro 18k 41mm 65.000 € comprado en 2020 el 2026-11-02")).toBeNull();
     expect(referenceFromContext("")).toBeNull();
+  });
+  it("en segunda mano acepta mercados y descarta foros y redes", () => {
+    expect(isPreOwnedSourceUrl("https://www.chrono24.es/jaeger-lecoultre/ref-q169242j.htm")).toBe(true);
+    expect(isPreOwnedSourceUrl("https://www.ebay.com/itm/123")).toBe(true);
+    expect(isPreOwnedSourceUrl("https://www.reddit.com/r/Watches/comments/x")).toBe(false);
+    expect(isPreOwnedSourceUrl("https://www.youtube.com/watch?v=abc")).toBe(false);
   });
 });

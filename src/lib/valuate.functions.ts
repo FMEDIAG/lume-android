@@ -13,6 +13,7 @@ import {
 import { anchorToComparables } from "@/lib/comparables";
 import { buildFichaQueries, buildSiteQueries, formatSiteSearchInstructions, REFERENCE_SITES_BY_CATEGORY } from "@/lib/referenceSites";
 import {
+  isPreOwnedSourceUrl,
   excerptAround,
   firecrawlSearch,
   referenceFromContext,
@@ -716,7 +717,7 @@ async function fetchEurPerUsd(): Promise<number> {
   }
 }
 
-type WatchRetailOutcome = { result: ValuationResult | null; hint?: string };
+type WatchRetailOutcome = { result: ValuationResult | null; hint?: string; itemId?: ItemId };
 
 async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<WatchRetailOutcome> {
   const es = data.lang === "es";
@@ -750,9 +751,112 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Wa
 
   // "Tasa siempre": sin precio de tienda fiable no devolvemos ceros — pasamos al
   // flujo general con una nota que explica el motivo y pide un valor orientativo.
+  // Lo ya identificado se reutiliza en el flujo general, sin repetir la identificación.
+  const watchItemId: ItemId = {
+    category: "watches",
+    summary: [id.description.trim(), `${name}${id.referenceCertain && id.reference ? ` ref. ${id.reference}` : ""}`]
+      .filter(Boolean)
+      .join(" "),
+    searchQueries: [
+      `${id.brand} ${id.model} ${id.referenceCertain ? id.reference : ""} pre-owned price sold`,
+      `${id.brand} ${id.model} ${id.referenceCertain ? id.reference : ""} segunda mano precio`,
+    ]
+      .map((q) => q.replace(/\s+/g, " ").trim())
+      .filter((q) => q.length > 12),
+    missingInfo: id.referenceCertain ? [] : [es ? "referencia exacta del reloj" : "exact watch reference"],
+    ficha: { maker: id.brand, model: id.model, reference: id.referenceCertain ? id.reference : "" },
+  };
   const fallBack = (reason: string, hint: string): WatchRetailOutcome => {
     console.error(`[valuateItem] watch retail: ${reason}`);
-    return { result: null, hint };
+    return { result: null, hint, itemId: watchItemId };
+  };
+
+  // Sin precio de tienda: anuncios y ventas de segunda mano de la MISMA referencia, con enlaces.
+  const tryPreOwned = async (): Promise<ValuationResult | null> => {
+    const ctrl = new AbortController();
+    const tm = setTimeout(() => ctrl.abort(), 30_000);
+    const found: SearchPage[] = [];
+    try {
+      const qs = [
+        `${id.brand} ${id.reference} pre-owned used price`,
+        `${id.brand} ${id.reference} segunda mano precio`,
+      ];
+      const res = await Promise.allSettled(qs.map((q) => firecrawlSearch(q, ctrl.signal)));
+      const seenUrls = new Set<string>();
+      for (const r of res) {
+        if (r.status !== "fulfilled") continue;
+        for (const pg of r.value) {
+          if (seenUrls.has(pg.url) || !isPreOwnedSourceUrl(pg.url)) continue;
+          if (!mentionsReference(pg.title + " " + pg.markdown, id.reference)) continue;
+          seenUrls.add(pg.url);
+          found.push(pg);
+        }
+      }
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(tm);
+    }
+    const pgs = found.slice(0, 8);
+    if (pgs.length === 0) return null;
+
+    const sys = es
+      ? `Para cada página, extrae el precio del reloj de SEGUNDA MANO con referencia exacta "${id.reference}" anunciado o vendido en ella. Ignora relojes nuevos de tienda, otras referencias, accesorios, cuotas mensuales y precios tachados. Si hay varios anuncios, devuelve el más representativo. Si no hay un precio claro, no incluyas esa página. Devuelve SOLO JSON {"listings":[{"index":número,"store":"nombre","price":número,"currency":"EUR|USD"}]}.`
+      : `For each page, extract the price of the PRE-OWNED watch with exact reference "${id.reference}" listed or sold on it. Ignore new retail watches, other references, accessories, monthly instalments and struck-through prices. If there are several listings, return the most representative. If there is no clear price, leave that page out. Return ONLY JSON {"listings":[{"index":number,"store":"name","price":number,"currency":"EUR|USD"}]}.`;
+    const exc = pgs.map((pg, i) => ({ i, text: excerptAround(pg.markdown, id.reference) }));
+    const body = exc.map((e) => `### [${e.i}] ${pgs[e.i].title}\n${pgs[e.i].url}\n${e.text}`).join("\n\n");
+    let ex2: { text: string };
+    let rate: number;
+    try {
+      [ex2, rate] = await Promise.all([
+        chatCompletion({
+          messages: [
+            { role: "system", content: sys },
+            { role: "user", content: body },
+          ],
+          json: true,
+          timeoutMs: 25_000,
+          maxTokens: 800,
+          preferFast: true,
+        }),
+        fetchEurPerUsd(),
+      ]);
+    } catch {
+      return null;
+    }
+    let raw: Array<{ index?: unknown; store?: unknown; price?: unknown; currency?: unknown }> = [];
+    try {
+      const j = JSON.parse(ex2.text) as { listings?: unknown };
+      if (Array.isArray(j.listings)) raw = j.listings as typeof raw;
+    } catch {
+      return null;
+    }
+    const ls: RetailListing[] = [];
+    for (const l of raw) {
+      const idx = Number(l.index);
+      const pg = pgs[idx];
+      const price = toNumberLoose(l.price);
+      const currency = String(l.currency).toUpperCase() === "USD" ? "USD" : "EUR";
+      if (!pg || !(price > 0) || !priceAppearsInText(exc[idx].text, price)) continue;
+      ls.push({ url: pg.url, title: String(l.store || pg.title).slice(0, 80), price, currency });
+    }
+    const rg = retailRange(ls, rate);
+    if (!rg) return null;
+    return ResultSchema.parse({
+      title: `${name} ${id.reference}`.slice(0, 200),
+      identification: id.description.trim()
+        ? `${id.description.trim()} ${es ? "Referencia" : "Reference"}: ${id.reference}.`
+        : `${name} — ref. ${id.reference}`,
+      priceEurMin: rg.eurMin,
+      priceEurMax: rg.eurMax,
+      priceUsdMin: rg.usdMin,
+      priceUsdMax: rg.usdMax,
+      confidence: ls.length >= 3 ? "medium" : "low",
+      notes: es
+        ? `No consta que este reloj se venda ahora en tiendas: el valor mostrado es de segunda mano (${ls.length} anuncio(s) consultados el ${today}), no un precio de tienda.`
+        : `This watch does not appear to be on sale in stores now: the value shown is pre-owned (${ls.length} listing(s) checked on ${today}), not a retail price.`,
+      sources: Array.from(new Set(ls.map((l) => l.url.slice(0, 200)))).slice(0, 8),
+    });
   };
 
   if (!id.referenceCertain || normRef(id.reference).length < 4) {
@@ -797,6 +901,10 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Wa
     ? `Nota del sistema: no se han podido consultar las tiendas y distribuidores (el servicio de búsqueda no responde, no está conectado o no tiene créditos), así que no hay precio de tienda nuevo. Tasa igualmente con tu mejor estimación orientativa a partir de las fotos y lo que encuentres en la web, con confianza "low", y aclara en "notes" que la consulta de tiendas falló y se puede reintentar. No cites fuentes que no hayas consultado.`
     : `System note: the store and dealer lookup failed (the search service is not responding, not connected or out of credits), so there is no new retail price. Still appraise it with your best indicative estimate from the photos and whatever you find on the web, with "low" confidence, and clarify in "notes" that the store lookup failed and can be retried. Never cite sources you did not consult.`;
   if (pages.length === 0) {
+    if (!searchFailed) {
+      const pre = await tryPreOwned();
+      if (pre) return { result: pre };
+    }
     return searchFailed
       ? fallBack(`search service unavailable for reference ${id.reference}`, serviceDownHint)
       : fallBack(`no retail listings for reference ${id.reference}`, notFoundHint);
@@ -839,7 +947,11 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Wa
     listings.push({ url: page.url, title: String(l.store || page.title).slice(0, 80), price, currency });
   }
   const range = retailRange(listings, eurPerUsd);
-  if (!range) return fallBack(`no extractable retail prices for reference ${id.reference}`, notFoundHint);
+  if (!range) {
+    const pre = await tryPreOwned();
+    if (pre) return { result: pre };
+    return fallBack(`no extractable retail prices for reference ${id.reference}`, notFoundHint);
+  }
 
   return { result: ResultSchema.parse({
     title: `${name} ${id.reference}`.slice(0, 200),
@@ -939,11 +1051,13 @@ export const valuateItem = createServerFn({ method: "POST" })
       }
 
       let watchHint: string | undefined;
+      let watchItemId: ItemId | undefined;
       if (data.category === "watches") {
         try {
           const outcome = await valuateWatchRetail(data);
           if (outcome.result) return outcome.result;
           watchHint = outcome.hint;
+          watchItemId = outcome.itemId;
         } catch (watchErr) {
           console.error("[valuateItem] watch retail lookup failed, using general flow:", watchErr);
           if (isQuotaError(watchErr)) throw watchErr;
@@ -969,7 +1083,7 @@ export const valuateItem = createServerFn({ method: "POST" })
 
       let itemId: ItemId | null = null;
       try {
-        if (USE_IDENTIFICATION_PASS) itemId = await identifyItem(data);
+        if (USE_IDENTIFICATION_PASS) itemId = watchItemId ?? (await identifyItem(data));
       } catch (idErr) {
         console.error("[valuateItem] identification pass failed, continuing without it:", idErr);
         if (isQuotaError(idErr)) throw idErr;
@@ -1022,6 +1136,24 @@ export const valuateItem = createServerFn({ method: "POST" })
       const rangeLineEn =
         "\n\nIMPORTANT: ALWAYS give a realistic estimated price range (even if wide) and use \"low\" confidence if unsure. Do not return zero prices and reply only with the requested JSON.";
 
+      const finish = (r: ValuationResult): ValuationResult => {
+        const hasLink = r.sources.some((s) => /^https?:\/\//i.test(s));
+        const flagged =
+          watchHint && !hasLink
+            ? {
+                ...r,
+                confidence: "low" as const,
+                notes: `${
+                  data.lang === "es"
+                    ? "Estimación sin fuentes verificadas: no se han podido consultar anuncios reales de este reloj."
+                    : "Estimate without verified sources: no real listings of this watch could be checked."
+                }\n\n${r.notes}`
+                  .trim()
+                  .slice(0, 4000),
+              }
+            : r;
+        return withMissingInfo(flagged, itemId, data.lang);
+      };
       let forceRange = false;
       let zeroFallback: ValuationResult | null = null;
       let lastErr: unknown = null;
@@ -1088,11 +1220,11 @@ export const valuateItem = createServerFn({ method: "POST" })
             forceRange = true;
             continue;
           }
-          return withMissingInfo(r, itemId, data.lang);
+          return finish(r);
         } catch (attemptErr) {
           lastErr = attemptErr;
           if ((attempt === 2 || isQuotaError(attemptErr)) && zeroFallback) {
-            return withMissingInfo(zeroFallback, itemId, data.lang);
+            return finish(zeroFallback);
           }
           if (isQuotaError(attemptErr)) break;
           // Un fallo de red/servicio no se arregla repitiendo toda la tasación (hasta 40 s más).

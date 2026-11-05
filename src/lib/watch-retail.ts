@@ -51,6 +51,21 @@ export function isRetailUrl(url: string): boolean {
   }
 }
 
+// Segunda mano: valen mercados y casas de subastas, pero no foros, redes ni vídeos.
+const NOT_A_LISTING_RE =
+  /(reddit\.|forum|youtube\.|instagram\.|facebook\.|pinterest\.|tiktok\.|twitter\.|wikipedia\.|watchuseek)/i;
+
+/** Página que puede contener un anuncio o venta de segunda mano (no foros, redes ni vídeos). */
+export function isPreOwnedSourceUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (!/^https?:$/.test(u.protocol)) return false;
+    return !NOT_A_LISTING_RE.test(u.hostname + u.pathname);
+  } catch {
+    return false;
+  }
+}
+
 /** ¿Aparece ese importe escrito en la página? Evita precios inventados por el modelo. */
 export function priceAppearsInText(text: string, price: number): boolean {
   if (!(price > 0)) return false;

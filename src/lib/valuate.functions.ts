@@ -1152,9 +1152,12 @@ export const valuateItem = createServerFn({ method: "POST" })
                   r.identification,
                   !!itemId && itemId.ficha?.reference === "",
                 ),
+                // Si el propio sistema ya avisó de que no hay comparables verificados, no se repite.
                 notes: hasLink
                   ? trimNotes(r.notes)
-                  : `${data.lang === "es" ? "Estimación sin fuentes verificadas." : "Estimate without verified sources."} ${trimNotes(r.notes, 380)}`.trim(),
+                  : /^(Estimación orientativa|Indicative estimate)/i.test(r.notes.trim())
+                    ? trimNotes(r.notes, 380)
+                    : `${data.lang === "es" ? "Estimación sin fuentes verificadas." : "Estimate without verified sources."} ${trimNotes(r.notes, 380)}`.trim(),
                 ...(hasLink ? {} : { confidence: "low" as const }),
               }
             : r;

@@ -17,7 +17,7 @@ import { exportHistoryPdf, extractHistoryJsonFromPdf } from "@/lib/historyPdf";
 import { translations, type Lang } from "@/lib/i18n";
 import { formatEur, formatUsd } from "@/lib/formatPrice";
 import { extractPricePerSqm } from "@/lib/pricePerSqm";
-import { sourceLabel, sourceUrl } from "@/lib/sourceLinks";
+import { sourceLabel, sourceUrl, uniqueSources } from "@/lib/sourceLinks";
 
 const ITEMS_PAGE = 5;
 const MAX_IMPORT_BYTES = 80 * 1024 * 1024; // 80 MB (fotos sin comprimir)
@@ -431,7 +431,7 @@ function HistoryPage() {
                               {t.sources}
                             </p>
                             <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                              {v.sources.map((s, i) => (
+                              {uniqueSources(v.sources).map((s, i) => (
                                 <a
                                   key={i}
                                   href={sourceUrl(s, v.title)}

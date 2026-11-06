@@ -24,7 +24,7 @@ import { detectCategory } from "@/lib/detect-category.functions";
 import { translations, type Lang } from "@/lib/i18n";
 import { saveValuation, type Valuation } from "@/lib/history";
 import { formatEur, formatUsd } from "@/lib/formatPrice";
-import { sourceLabel, sourceUrl } from "@/lib/sourceLinks";
+import { sourceLabel, sourceUrl, uniqueSources } from "@/lib/sourceLinks";
 import { isCategoryMismatch } from "@/lib/categoryMismatch";
 import { extractPricePerSqm } from "@/lib/pricePerSqm";
 //
@@ -716,7 +716,7 @@ function ResultCard({
           <div className="mt-4">
             <p className="text-xs uppercase tracking-wider text-muted-foreground">{t.sources}</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {result.sources.map((s, i) => (
+              {uniqueSources(result.sources).map((s, i) => (
                 <a
                   key={i}
                   href={sourceUrl(s, result.title)}

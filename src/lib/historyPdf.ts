@@ -1,3 +1,4 @@
+import { uniqueSources } from "@/lib/sourceLinks";
 import { jsPDF } from "jspdf";
 import { getHistory, type Valuation } from "./history";
 import { formatEur, formatUsd } from "./formatPrice";
@@ -276,7 +277,7 @@ export async function exportHistoryPdf(lang: PdfLang = "es"): Promise<void> {
     }
     if (v.sources && v.sources.length > 0) {
       label(t.sources);
-      paragraph(v.sources.join(" · "));
+      paragraph(uniqueSources(v.sources).join(" · "));
     }
 
     // línea separadora dorada suave

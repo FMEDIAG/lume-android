@@ -46,3 +46,14 @@ export function sourceUrl(source: string, query: string): string {
     return `https://www.pricecharting.com/search-products?type=videogames&q=${q}`;
   return `https://www.google.com/search?q=${encodeURIComponent(query + " " + source)}`;
 }
+
+/** Una sola referencia por web: quita las repetidas (mismo sitio), conservando la primera. */
+export function uniqueSources(sources: string[] | undefined | null): string[] {
+  const seen = new Set<string>();
+  return (sources ?? []).filter((s) => {
+    const key = sourceLabel(s).toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}

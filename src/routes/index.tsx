@@ -170,13 +170,11 @@ function Index() {
     if (detectedForRef.current === latest.id) return;
     detectedForRef.current = latest.id;
     setDetecting(true);
-    makeThumbnail(latest.dataUrl, 384, 0.6)
+    makeThumbnail(latest.dataUrl)
       .catch(() => latest.dataUrl)
       .then((thumb) => detect({ data: { dataUrl: thumb, lang } }))
       .then((r) => {
         if (detectedForRef.current !== latest.id) return;
-        // Sin detección fiable: se queda en Auto y la tasación identifica el objeto igualmente.
-        if (!r.confidence) return;
         setSuggested(r.category);
         setSuggestedConfidence(r.confidence);
         setCandidates(r.candidates.slice(0, 3));
@@ -191,6 +189,11 @@ function Index() {
         setSuggested(null);
         setSuggestedConfidence(null);
         setCandidates([]);
+        toast(
+          lang === "es"
+            ? "No se pudo detectar la categoría ahora: elígela a mano."
+            : "Could not detect the category right now: please choose it manually.",
+        );
       })
       .finally(() => {
         if (detectedForRef.current === latest.id) setDetecting(false);

@@ -66,6 +66,8 @@ function allowed(ip: string): boolean {
   return true;
 }
 
+const FALLBACK = { category: "other" as const, confidence: 0, candidates: [{ category: "other" as const, confidence: 0 }] };
+
 type CategoryKey = (typeof CATEGORY_KEYS)[number];
 
 function isCategoryKey(c: unknown): c is CategoryKey {
@@ -144,8 +146,8 @@ export const detectCategory = createServerFn({ method: "POST" })
           ],
           json: true,
           search: false,
-          timeoutMs: 12_000,
-          maxTokens: 400,
+          timeoutMs: 8_000,
+          maxTokens: 200,
           preferFast: true,
         }));
         break;
@@ -153,20 +155,18 @@ export const detectCategory = createServerFn({ method: "POST" })
         const msg = err instanceof Error ? err.message : String(err);
         if (/429|RESOURCE_EXHAUSTED/i.test(msg)) {
           console.error("[detectCategory] AI quota exceeded:", msg);
-          setResponseStatus(429);
-          throw new Error("Detection quota exceeded");
+          return FALLBACK;
         }
         console.error(`[detectCategory] attempt ${attempt} failed:`, msg);
-        if (attempt === 2) throw err;
-        await new Promise((r) => setTimeout(r, 1200));
+        if (attempt === 2) return FALLBACK;
       }
     }
 
-    let parsed: unknown;
+    // Nunca falla: si la respuesta no sirve, la tasación detecta la categoría por su cuenta.
     try {
-      parsed = JSON.parse(text);
+      const m = text.match(/\{[\s\S]*\}/);
+      return normalizeOutput(JSON.parse(m ? m[0] : text));
     } catch {
-      throw new Error("Model did not return valid JSON");
+      return FALLBACK;
     }
-    return normalizeOutput(parsed);
   });

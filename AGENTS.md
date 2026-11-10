@@ -13,3 +13,4 @@
 - Build category-specific reference queries for general and coin valuations; accept comparable pages only when their normalized URLs appear in provider citations, prioritize sold prices, and label unsupported ranges as low-confidence estimates because website names alone are not evidence.
 - Watch valuations use src/lib/watch-retail.ts (Firecrawl search via connector gateway, retail-only URLs, prices must appear in the scraped page) — keeps figures backed by pages actually consulted.
 - General valuations try evidence-capable search before ungrounded generation and retry only invalid received output, not network failures; watch currency lookup runs alongside extraction with a bounded wait — avoids serial work without changing coin or Magic pipelines.
+- Validate general valuation prices with positivePrices; repair missing bounds only from received positive values and retry empty prices, never return a zero fallback or invent a minimum.

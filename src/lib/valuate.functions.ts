@@ -11,6 +11,7 @@ import {
   type MetalSpots,
 } from "@/lib/lume-ai";
 import { anchorToComparables } from "@/lib/comparables";
+import { positivePrices } from "@/lib/positive-prices";
 import { capConfidenceForMissing, keyDataPrompt } from "@/lib/key-data";
 import { buildFichaQueries, buildSiteQueries, formatSiteSearchInstructions, REFERENCE_SITES_BY_CATEGORY } from "@/lib/referenceSites";
 import {
@@ -1169,7 +1170,6 @@ export const valuateItem = createServerFn({ method: "POST" })
         return withMissingInfo(flagged, itemId, data.lang);
       };
       let forceRange = false;
-      let zeroFallback: ValuationResult | null = null;
       let lastErr: unknown = null;
 
       for (let attempt = 1; attempt <= 2; attempt++) {
@@ -1226,26 +1226,22 @@ export const valuateItem = createServerFn({ method: "POST" })
             throw new Error("Valuation service returned an unexpected response");
           }
 
-          const r = result.data;
-          const allZero = !(r.priceEurMax > 0) && !(r.priceUsdMax > 0);
-          if (allZero && attempt === 1) {
-            // Sin precio: lo intentamos de nuevo pidiendo un rango estimado.
-            zeroFallback = r;
+          const r = positivePrices(result.data, EUR_PER_USD_APPROX);
+          if (!r) {
+            // Una respuesta sin precio no es una tasación. Reintentar sin inventar un suelo.
             forceRange = true;
-            continue;
+            throw new Error("Valuation service returned no positive price");
           }
           return finish(r);
         } catch (attemptErr) {
           lastErr = attemptErr;
-          if ((attempt === 2 || isQuotaError(attemptErr)) && zeroFallback) {
-            return finish(zeroFallback);
-          }
           if (isQuotaError(attemptErr)) break;
           // Un fallo de red/servicio no se arregla repitiendo toda la tasación (hasta 40 s más).
           // Solo corregimos respuestas recibidas con JSON o campos inválidos.
           if (!(attemptErr instanceof Error) || ![
             "Model did not return valid JSON",
             "Valuation service returned an unexpected response",
+            "Valuation service returned no positive price",
           ].includes(attemptErr.message)) break;
         }
       }

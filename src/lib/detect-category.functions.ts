@@ -95,10 +95,15 @@ function normalizeOutput(raw: unknown) {
   if (!category) throw new Error("Model returned no valid category");
   const confidence =
     obj.confidence !== undefined ? toConf(obj.confidence) : (candidates[0]?.confidence ?? 0);
+  // Ninguna candidata puede superar en % a la categoría detectada.
+  const capped = candidates.map((c) => ({
+    ...c,
+    confidence: Math.min(c.confidence, confidence),
+  }));
   return OutputSchema.parse({
     category,
     confidence,
-    candidates: (candidates.length ? candidates : [{ category, confidence }]).slice(0, 5),
+    candidates: (capped.length ? capped : [{ category, confidence }]).slice(0, 5),
   });
 }
 

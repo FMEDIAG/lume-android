@@ -76,10 +76,11 @@ function isCategoryKey(c: unknown): c is CategoryKey {
 // lista) en lugar de rechazar toda la respuesta.
 function normalizeOutput(raw: unknown) {
   const obj = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  // Nunca 100%: si la categoría detectada es válida, siempre queda un margen de duda.
   const toConf = (v: unknown): number => {
     const n = Number(v);
     if (!Number.isFinite(n)) return 0;
-    return Math.max(0, Math.min(100, n > 0 && n <= 1 ? n * 100 : n));
+    return Math.max(0, Math.min(99, n > 0 && n <= 1 ? n * 100 : n));
   };
   const candidates: Array<{ category: CategoryKey; confidence: number }> = [];
   if (Array.isArray(obj.candidates)) {

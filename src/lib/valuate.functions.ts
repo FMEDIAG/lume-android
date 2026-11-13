@@ -859,7 +859,7 @@ async function valuateWatchRetail(data: z.infer<typeof InputSchema>): Promise<Wa
       priceEurMax: rg.eurMax,
       priceUsdMin: rg.usdMin,
       priceUsdMax: rg.usdMax,
-      confidence: ls.length >= 3 ? "medium" : "low",
+      confidence: "medium",
       notes: es
         ? `No consta que este reloj se venda ahora en tiendas: el valor mostrado es de segunda mano (${ls.length} anuncio(s) consultados el ${today}), no un precio de tienda.`
         : `This watch does not appear to be on sale in stores now: the value shown is pre-owned (${ls.length} listing(s) checked on ${today}), not a retail price.`,
@@ -1148,7 +1148,7 @@ export const valuateItem = createServerFn({ method: "POST" })
       const rangeLineEn =
         "\n\nIMPORTANT: ALWAYS give a realistic estimated price range (even if wide) and use \"low\" confidence if unsure. Do not return zero prices and reply only with the requested JSON.";
 
-      const finish = (r: ValuationResult): ValuationResult => {
+      const finish = (r: ValuationResult, verifiedPrice: boolean): ValuationResult => {
         const hasLink = r.sources.some((s) => /^https?:\/\//i.test(s));
         const flagged =
           watchHint
@@ -1167,7 +1167,10 @@ export const valuateItem = createServerFn({ method: "POST" })
                 ...(hasLink ? {} : { confidence: "low" as const }),
               }
             : r;
-        return withMissingInfo(flagged, itemId, data.lang);
+        const finished = withMissingInfo(flagged, itemId, data.lang);
+        return verifiedPrice && finished.confidence === "low"
+          ? { ...finished, confidence: "medium" }
+          : finished;
       };
       let forceRange = false;
       let lastErr: unknown = null;
@@ -1214,7 +1217,7 @@ export const valuateItem = createServerFn({ method: "POST" })
           }
 
           // Precio encontrado de verdad (anuncios o ventas verificados) manda sobre la estimación.
-          const anchored = anchorToComparables(parsed, citations, EUR_PER_USD_APPROX, data.lang);
+          const anchored = anchorToComparables(parsed, citations, EUR_PER_USD_APPROX, data.lang, true);
           if (!anchored) parsed = applyBulkFloor(parsed);
 
           const result = ResultSchema.safeParse(parsed);
@@ -1232,7 +1235,7 @@ export const valuateItem = createServerFn({ method: "POST" })
             forceRange = true;
             throw new Error("Valuation service returned no positive price");
           }
-          return finish(r);
+          return finish(r, anchored);
         } catch (attemptErr) {
           lastErr = attemptErr;
           if (isQuotaError(attemptErr)) break;

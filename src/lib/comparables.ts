@@ -69,6 +69,7 @@ export type ComparableRange = {
 export function rangeFromComparables(
   list: Comparable[],
   eurPerUsd: number,
+  minimumComparables = 2,
 ): ComparableRange | null {
   if (!Number.isFinite(eurPerUsd) || eurPerUsd <= 0) return null;
   const eur = (c: Comparable) => (c.currency === "EUR" ? c.price : c.price * eurPerUsd);
@@ -80,7 +81,7 @@ export function rangeFromComparables(
     const median = sorted[Math.floor(sorted.length / 2)];
     used = used.filter((c) => eur(c) >= median * 0.4 && eur(c) <= median * 2.5);
   }
-  if (used.length < 2) return null;
+  if (used.length < minimumComparables || used.length === 0) return null;
   const values = used.map(eur);
   let lo = Math.min(...values);
   let hi = Math.max(...values);
@@ -98,12 +99,13 @@ export function anchorToComparables(
   citationUrls: string[],
   eurPerUsd: number,
   lang: "es" | "en",
+  acceptSingleVerifiedPrice = false,
 ): boolean {
   if (!parsed || typeof parsed !== "object") return false;
   const p = parsed as Record<string, unknown>;
   p.sources = Array.from(new Set(citationUrls.filter((url) => pageOf(url) && url.length <= 200))).slice(0, 8);
   const verified = verifyComparables(p.comparables, citationUrls);
-  const range = rangeFromComparables(verified, eurPerUsd);
+  const range = rangeFromComparables(verified, eurPerUsd, acceptSingleVerifiedPrice ? 1 : 2);
   if (!range) {
     p.confidence = "low";
     const warning = lang === "es"
@@ -120,6 +122,7 @@ export function anchorToComparables(
 
   const sold = range.used.filter((c) => c.kind === "sold").length;
   const asking = range.used.length - sold;
+  if (acceptSingleVerifiedPrice && (p.confidence === "low" || range.used.length === 1)) p.confidence = "medium";
   if (asking > 0 && p.confidence === "high") p.confidence = "medium";
   const line =
     lang === "es"

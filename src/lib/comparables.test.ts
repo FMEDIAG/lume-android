@@ -39,4 +39,28 @@ describe("tasaciones respaldadas por páginas reales", () => {
     assert.deepEqual(verifyComparables([{ ...a, kind: "catalogue" }], [a.url]), []);
     assert.equal(rangeFromComparables([a, b], 0), null);
   });
+  it("un precio del objeto verificado da confianza media y su referencia exacta", () => {
+    const result = { priceEurMin: 50, priceEurMax: 200, confidence: "low", sources: [], comparables: [a] };
+    assert.equal(anchorToComparables(result, [a.url], 0.8, "es", true), true);
+    assert.equal(result.confidence, "medium");
+    assert.equal(result.priceEurMin, 100);
+    assert.equal(result.priceEurMax, 100);
+    assert.deepEqual(result.sources, [a.url]);
+  });
+  it("dos precios verificados no conservan confianza baja", () => {
+    const result = { confidence: "low", comparables: [a, b] };
+    assert.equal(anchorToComparables(result, [a.url, b.url], 0.8, "es", true), true);
+    assert.equal(result.confidence, "medium");
+  });
+  it("una página descriptiva sin precio verificable no eleva la confianza", () => {
+    const result = { confidence: "high", sources: [], comparables: [a] };
+    assert.equal(anchorToComparables(result, ["https://wikipedia.org/wiki/Objeto"], 0.8, "es", true), false);
+    assert.equal(result.confidence, "low");
+    assert.deepEqual(result.sources, ["https://wikipedia.org/wiki/Objeto"]);
+  });
+  it("la política predeterminada de monedas conserva el mínimo de dos comparables", () => {
+    const result = { confidence: "high", comparables: [a] };
+    assert.equal(anchorToComparables(result, [a.url], 0.8, "es"), false);
+    assert.equal(result.confidence, "low");
+  });
 });

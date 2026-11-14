@@ -58,9 +58,26 @@ describe("tasaciones respaldadas por páginas reales", () => {
     assert.equal(result.confidence, "low");
     assert.deepEqual(result.sources, ["https://wikipedia.org/wiki/Objeto"]);
   });
-  it("la política predeterminada de monedas conserva el mínimo de dos comparables", () => {
+  it("la política predeterminada conserva el mínimo de dos comparables", () => {
     const result = { confidence: "high", comparables: [a] };
     assert.equal(anchorToComparables(result, [a.url], 0.8, "es"), false);
     assert.equal(result.confidence, "low");
+  });
+  it("100 francos suizos: un precio citado conserva su referencia y eleva la confianza a media", () => {
+    // Fixture sintética: no es un anuncio ni un precio real de esta moneda.
+    const coin = { ...a, title: "Suiza 100 francos oro 1925", price: 2400, url: "https://example.com/swiss-100-francs-1925" };
+    const result = { priceEurMin: 2000, priceEurMax: 3000, confidence: "low", sources: [], comparables: [coin] };
+    assert.equal(anchorToComparables(result, [coin.url], 0.8, "es", true), true);
+    assert.equal(result.confidence, "medium");
+    assert.deepEqual(result.sources, [coin.url]);
+    assert.equal(result.priceEurMin, 2400);
+    assert.equal(result.priceEurMax, 2400);
+  });
+  it("100 francos suizos: sin página citada no inventa referencias ni confirma el precio", () => {
+    const coin = { ...a, title: "Suiza 100 francos oro", url: "https://example.com/swiss-100-francs" };
+    const result = { confidence: "high", sources: [coin.url], comparables: [coin] };
+    assert.equal(anchorToComparables(result, [], 0.8, "es", true), false);
+    assert.equal(result.confidence, "low");
+    assert.deepEqual(result.sources, []);
   });
 });

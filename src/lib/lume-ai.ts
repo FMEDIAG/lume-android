@@ -359,7 +359,15 @@ async function fetchJson(url: string, ms: number): Promise<unknown | null> {
   }
 }
 
+const SPOTS_CACHE_TTL_MS = 5 * 60_000;
+let cachedSpots: { data: MetalSpots; expiresAt: number } | null = null;
+let lastKnownSpots: MetalSpots | null = null;
+
 export async function getMetalSpots(): Promise<MetalSpots | null> {
+  const now = Date.now();
+  if (cachedSpots && now < cachedSpots.expiresAt) {
+    return cachedSpots.data;
+  }
   const [gold, silver, fx] = await Promise.all([
     fetchJson("https://api.gold-api.com/price/XAU", 4000),
     fetchJson("https://api.gold-api.com/price/XAG", 4000),
@@ -368,16 +376,26 @@ export async function getMetalSpots(): Promise<MetalSpots | null> {
   const goldUsd = Number((gold as { price?: number } | null)?.price);
   const silverUsd = Number((silver as { price?: number } | null)?.price);
   const eurPerUsd = Number((fx as { rates?: { EUR?: number } } | null)?.rates?.EUR);
-  if (!Number.isFinite(goldUsd) || goldUsd <= 0) return null;
-  if (!Number.isFinite(silverUsd) || silverUsd <= 0) return null;
-  if (!Number.isFinite(eurPerUsd) || eurPerUsd <= 0) return null;
-  return {
+  if (
+    !Number.isFinite(goldUsd) ||
+    goldUsd <= 0 ||
+    !Number.isFinite(silverUsd) ||
+    silverUsd <= 0 ||
+    !Number.isFinite(eurPerUsd) ||
+    eurPerUsd <= 0
+  ) {
+    return lastKnownSpots;
+  }
+  const result: MetalSpots = {
     goldUsd,
     silverUsd,
     eurPerUsd,
     goldEur: goldUsd * eurPerUsd,
     silverEur: silverUsd * eurPerUsd,
   };
+  cachedSpots = { data: result, expiresAt: now + SPOTS_CACHE_TTL_MS };
+  lastKnownSpots = result;
+  return result;
 }
 
 export function roundMoney(n: number): number {

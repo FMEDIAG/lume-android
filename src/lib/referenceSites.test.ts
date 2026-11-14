@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import { buildFichaQueries, buildSiteQueries, REFERENCE_SITES_BY_CATEGORY, referenceDomainsFor } from "./referenceSites.ts";
 
 describe("búsqueda por referencias", () => {

@@ -499,6 +499,7 @@ Return ONLY JSON with: summary (detailed identification in 2-4 sentences, separa
     search: false,
     timeoutMs: 25_000,
     maxTokens: 700,
+    preferFast: true,
   });
 
   let parsed: unknown;
@@ -711,17 +712,30 @@ const WatchIdSchema = z.object({
   description: z.coerce.string().max(700).catch(""),
 });
 
+const FX_CACHE_TTL_MS = 5 * 60_000;
+let cachedFxRate: { rate: number; expiresAt: number } | null = null;
+let lastKnownFxRate = EUR_PER_USD_APPROX;
+
 async function fetchEurPerUsd(): Promise<number> {
+  const now = Date.now();
+  if (cachedFxRate && now < cachedFxRate.expiresAt) {
+    return cachedFxRate.rate;
+  }
   try {
     const res = await fetch("https://api.frankfurter.app/latest?from=USD&to=EUR", {
       signal: AbortSignal.timeout(4000),
     });
-    if (!res.ok) return EUR_PER_USD_APPROX;
+    if (!res.ok) return lastKnownFxRate;
     const j = (await res.json()) as { rates?: { EUR?: number } };
     const r = Number(j.rates?.EUR);
-    return Number.isFinite(r) && r > 0 ? r : EUR_PER_USD_APPROX;
+    if (Number.isFinite(r) && r > 0) {
+      cachedFxRate = { rate: r, expiresAt: now + FX_CACHE_TTL_MS };
+      lastKnownFxRate = r;
+      return r;
+    }
+    return lastKnownFxRate;
   } catch {
-    return EUR_PER_USD_APPROX;
+    return lastKnownFxRate;
   }
 }
 

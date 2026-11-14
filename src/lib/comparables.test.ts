@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import { anchorToComparables, rangeFromComparables, verifyComparables, type Comparable } from "./comparables.ts";
 
 const a: Comparable = { title: "Objeto modelo A", price: 100, currency: "EUR", kind: "sold", url: "https://ebay.com/itm/1" };
@@ -58,7 +58,7 @@ describe("tasaciones respaldadas por páginas reales", () => {
     assert.equal(result.confidence, "low");
     assert.deepEqual(result.sources, ["https://wikipedia.org/wiki/Objeto"]);
   });
-  it("la política predeterminada conserva el mínimo de dos comparables", () => {
+  it("la política predeterminada de monedas conserva el mínimo de dos comparables", () => {
     const result = { confidence: "high", comparables: [a] };
     assert.equal(anchorToComparables(result, [a.url], 0.8, "es"), false);
     assert.equal(result.confidence, "low");

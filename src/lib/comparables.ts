@@ -108,9 +108,13 @@ export function anchorToComparables(
   const range = rangeFromComparables(verified, eurPerUsd, acceptSingleVerifiedPrice ? 1 : 2);
   if (!range) {
     p.confidence = "low";
-    const warning = lang === "es"
-      ? "Estimación orientativa: no hay al menos dos comparables con páginas verificadas; no es un precio de mercado confirmado."
-      : "Indicative estimate: fewer than two comparables have verified pages; this is not a confirmed market price.";
+    const warning = acceptSingleVerifiedPrice
+      ? lang === "es"
+        ? "Estimación orientativa: no hay precios comparables con páginas verificadas; no es un precio de mercado confirmado."
+        : "Indicative estimate: no comparable prices have verified pages; this is not a confirmed market price."
+      : lang === "es"
+        ? "Estimación orientativa: no hay al menos dos comparables con páginas verificadas; no es un precio de mercado confirmado."
+        : "Indicative estimate: fewer than two comparables have verified pages; this is not a confirmed market price.";
     p.notes = `${warning}\n\n${typeof p.notes === "string" ? p.notes : ""}`.slice(0, 4000);
     return false;
   }

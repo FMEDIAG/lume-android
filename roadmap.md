@@ -1,4 +1,5 @@
 # Tasaciones con evidencia real
+- [x] Aceptar un precio comparable con página citada en monedas, con confianza mínima media y referencia directa; añadir regresión para 100 francos suizos.
 - [x] Evitar confianza baja cuando hay precios del objeto verificados y conservar sus referencias, sin cambiar monedas ni Magic; 28 pruebas pasan y la vista compila sin errores.
 - [x] Eliminar el retorno de tasaciones generales a cero y comprobar recuperación de extremos/divisas sin inventar mínimos.
 - [x] Reducir esperas innecesarias en tasaciones generales y relojes, sin cambiar monedas ni Magic; 27 pruebas pasan y tasación real sin contexto comprobada (62 s, estimación sin evidencia por límites del buscador).

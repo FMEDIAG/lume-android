@@ -1,7 +1,43 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tanstack/react-start/server", () => ({ getRequest: vi.fn() }));
-import { chatCompletion } from "./lume-ai";
+import { chatCompletion, raceForEvidence, type ChatResult } from "./lume-ai";
+
+const grounded = (text: string): ChatResult => ({ text, citations: ["https://shop.example/" + text] });
+const later = <T,>(ms: number, value: T) => new Promise<T>((r) => setTimeout(() => r(value), ms));
+
+describe("raceForEvidence", () => {
+  it("starts the next search when the first one is slow and returns the first grounded reply", async () => {
+    const started: number[] = [];
+    const t0 = Date.now();
+    const result = await raceForEvidence(
+      [
+        () => (started.push(Date.now() - t0), later(500, grounded("slow"))),
+        () => (started.push(Date.now() - t0), later(10, grounded("fast"))),
+      ],
+      50,
+    );
+    expect(result?.text).toBe("fast");
+    expect(started[1]).toBeLessThan(200);
+  });
+
+  it("falls back to the highest-priority ungrounded reply only after every search finishes", async () => {
+    const result = await raceForEvidence(
+      [
+        () => later(30, { text: "first", citations: [] }),
+        () => Promise.resolve(null),
+        () => later(5, { text: "third", citations: [] }),
+      ],
+      1000,
+    );
+    expect(result).toEqual({ text: "first", citations: [] });
+  });
+
+  it("returns null when every provider fails", async () => {
+    const result = await raceForEvidence([() => Promise.reject(new Error("x")), async () => null], 10);
+    expect(result).toBeNull();
+  });
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();

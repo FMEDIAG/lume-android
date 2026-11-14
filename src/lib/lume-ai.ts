@@ -108,6 +108,60 @@ export function extractJsonText(raw: string): string {
   return body.slice(start, end + 1);
 }
 
+type XaiSearchMode = "web_search" | "live_search" | "search_parameters" | "none";
+const XAI_SEARCH_MODES: XaiSearchMode[] = ["web_search", "live_search", "search_parameters"];
+// El modo de búsqueda de xAI que respondió la última vez se prueba primero: evita repetir
+// peticiones rechazadas en cada tasación. No bloquea ningún modo, solo cambia el orden.
+let workingXaiSearchMode: XaiSearchMode | null = null;
+
+// Margen que se da a un buscador antes de arrancar el siguiente en paralelo.
+export const EVIDENCE_HEDGE_DELAY_MS = 12_000;
+
+/**
+ * Lanza los proveedores en orden, escalonados: cada uno arranca cuando el anterior falla o
+ * responde sin evidencia, o tras `hedgeDelayMs` si sigue en marcha. Devuelve la primera
+ * respuesta con citas; si ninguna las trae, la primera sin citas según el orden de prioridad.
+ */
+export function raceForEvidence(
+  attempts: Array<() => Promise<ChatResult | null>>,
+  hedgeDelayMs: number,
+): Promise<ChatResult | null> {
+  if (attempts.length === 0) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const outcomes: Array<ChatResult | null | undefined> = attempts.map(() => undefined);
+    let next = 0;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const settle = (value: ChatResult | null) => {
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const launch = () => {
+      if (settled || next >= attempts.length) return;
+      const index = next++;
+      clearTimeout(timer);
+      if (next < attempts.length) timer = setTimeout(launch, hedgeDelayMs);
+      attempts[index]()
+        .catch(() => null)
+        .then((result) => {
+          outcomes[index] = result;
+          if (settled) return;
+          if (result && result.citations.length > 0) return settle(result);
+          launch();
+          if (outcomes.every((o) => o !== undefined)) {
+            const fallback = outcomes.find((o): o is ChatResult => !!o);
+            settle(fallback ? { ...fallback, citations: [] } : null);
+          }
+        });
+    };
+
+    launch();
+  });
+}
+
 export async function chatCompletion(opts: {
   messages: ChatMessage[];
   json?: boolean;
@@ -131,8 +185,12 @@ export async function chatCompletion(opts: {
 
     const tryXai = async (): Promise<ChatResult | null> => {
       if (!xaiKey) return null;
-      const searchModes: Array<"web_search" | "live_search" | "search_parameters" | "none"> =
-        opts.search ? ["web_search", "live_search", "search_parameters"] : ["none"];
+      const searchModes: XaiSearchMode[] = opts.search
+        ? [
+            ...(workingXaiSearchMode ? [workingXaiSearchMode] : []),
+            ...XAI_SEARCH_MODES.filter((m) => m !== workingXaiSearchMode),
+          ]
+        : ["none"];
 
       let lastErr = "";
       for (const mode of searchModes) {
@@ -146,7 +204,10 @@ export async function chatCompletion(opts: {
             body: JSON.stringify(xaiBody({ ...opts, search: mode !== "none", searchTool: mode })),
             signal: controller.signal,
           });
-          if (res.ok) return await parseChatJson(res);
+          if (res.ok) {
+            if (mode !== "none") workingXaiSearchMode = mode;
+            return await parseChatJson(res);
+          }
           lastErr = await res.text();
           console.error(`[lume-ai] xAI ${mode} [${res.status}]: ${lastErr.slice(0, 280)}`);
           // 401/403 = clave inválida; 402/429 = sin crédito o límite alcanzado.
@@ -224,12 +285,21 @@ export async function chatCompletion(opts: {
     const others = geminiFirst ? [tryGemini, tryMistral] : [tryMistral, tryGemini];
     const providers = opts.preferFast ? [...others, tryXai] : [tryXai, ...others];
     let ungroundedFallback: ChatResult | null = null;
-    for (const attempt of providers) {
-      const result = await attempt();
-      if (!result) continue;
-      if (!opts.search || result.citations.length > 0) return result;
-      // Antes de devolver una estimación sin evidencia, intenta los otros buscadores.
-      ungroundedFallback ??= { ...result, citations: [] };
+    if (opts.search && opts.evidenceFirst) {
+      // Búsquedas escalonadas: si un buscador tarda, el siguiente arranca sin esperar a que falle.
+      ungroundedFallback = await raceForEvidence(providers, EVIDENCE_HEDGE_DELAY_MS);
+      if (ungroundedFallback && ungroundedFallback.citations.length > 0) {
+        controller.abort(); // corta los buscadores que siguen en marcha: ya hay evidencia
+        return ungroundedFallback;
+      }
+    } else {
+      for (const attempt of providers) {
+        const result = await attempt();
+        if (!result) continue;
+        if (!opts.search || result.citations.length > 0) return result;
+        // Antes de devolver una estimación sin evidencia, intenta los otros buscadores.
+        ungroundedFallback ??= { ...result, citations: [] };
+      }
     }
     if (ungroundedFallback) return ungroundedFallback;
     if (!lovableKey && (mistralError || geminiError)) {
@@ -258,7 +328,7 @@ export async function chatCompletion(opts: {
           [xaiError, mistralError, geminiError, `gateway ${res.status}`].filter(Boolean).join("; "),
         );
       }
-      return parseChatJson(res);
+      return await parseChatJson(res);
     }
 
     throw new Error(xaiError ?? "AI is not available in this environment");

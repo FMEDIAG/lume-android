@@ -8,9 +8,19 @@ import {
   referenceFromContext,
   retailRange,
   trimNotes,
+  isSafeCitationUrl,
 } from "./watch-retail";
 
 describe("watch retail", () => {
+  it("only allows public HTTPS citation URLs for scraping", () => {
+    expect(isSafeCitationUrl("https://example.com/item/1")).toBe(true);
+    expect(isSafeCitationUrl("http://example.com/item/1")).toBe(false);
+    expect(isSafeCitationUrl("https://localhost/item/1")).toBe(false);
+    expect(isSafeCitationUrl("https://127.0.0.1/item/1")).toBe(false);
+    expect(isSafeCitationUrl("https://192.168.1.5/item/1")).toBe(false);
+    expect(isSafeCitationUrl("https://example.com:8443/item/1")).toBe(false);
+    expect(isSafeCitationUrl("https://user:pass@example.com/item/1")).toBe(false);
+  });
   it("rechaza mercados de segunda mano", () => {
     expect(isRetailUrl("https://www.chrono24.es/rolex/x.htm")).toBe(false);
     expect(isRetailUrl("https://www.ebay.es/itm/1")).toBe(false);

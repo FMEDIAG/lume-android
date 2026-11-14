@@ -10,7 +10,7 @@ import {
   roundMoney,
   type MetalSpots,
 } from "@/lib/lume-ai";
-import { anchorToComparables } from "@/lib/comparables";
+import { anchorToComparables, candidateComparableUrls, type ComparableEvidencePage } from "@/lib/comparables";
 import { positivePrices } from "@/lib/positive-prices";
 import { capConfidenceForMissing, keyDataPrompt } from "@/lib/key-data";
 import { buildFichaQueries, buildSiteQueries, formatSiteSearchInstructions, REFERENCE_SITES_BY_CATEGORY } from "@/lib/referenceSites";
@@ -20,6 +20,7 @@ import {
   isPreOwnedSourceUrl,
   excerptAround,
   firecrawlSearch,
+  firecrawlScrape,
   referenceFromContext,
   isRetailUrl,
   mentionsReference,
@@ -222,6 +223,33 @@ const SCRYFALL_HEADERS = {
 
 // Cambio aproximado, solo se usa si Scryfall trae precio en una moneda y no en la otra.
 const EUR_PER_USD_APPROX = 0.86;
+
+const MAX_COMPARABLE_PAGES_TO_VERIFY = 4;
+const COMPARABLE_SCRAPE_TIMEOUT_MS = 16_000;
+
+async function scrapeComparableEvidence(
+  raw: unknown,
+  citations: string[],
+): Promise<ComparableEvidencePage[]> {
+  const urls = candidateComparableUrls(raw, citations).slice(0, MAX_COMPARABLE_PAGES_TO_VERIFY);
+  if (urls.length < 2) return [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), COMPARABLE_SCRAPE_TIMEOUT_MS);
+  try {
+    const pages = await Promise.all(urls.map(async (url) => {
+      try {
+        const page = await firecrawlScrape(url, controller.signal);
+        return page ? { url: page.url, text: page.markdown } : null;
+      } catch {
+        return null;
+      }
+    }));
+    return pages.filter((page): page is ComparableEvidencePage => page !== null);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function scryfallGet(url: string): Promise<any | null> {
@@ -696,7 +724,14 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
   if (result.priceEurMax < result.priceEurMin) result.priceEurMax = result.priceEurMin;
   if (result.priceUsdMax < result.priceUsdMin) result.priceUsdMax = result.priceUsdMin;
 
-  const anchored = anchorToComparables(Object.assign(result, { comparables: price.comparables }), citations, spots?.eurPerUsd ?? EUR_PER_USD_APPROX, lang, true);
+  const evidencePages = await scrapeComparableEvidence(price.comparables, citations);
+  const anchored = anchorToComparables(
+    Object.assign(result, { comparables: price.comparables }),
+    citations,
+    spots?.eurPerUsd ?? EUR_PER_USD_APPROX,
+    lang,
+    evidencePages,
+  );
   // Los precios encontrados mandan sobre los suelos genéricos de una serie.
   const guarded = anchored ? result : applyCoinPriceGuards(result, { ...id, confidence: "low" }, spots);
   return ResultSchema.parse({ ...result, ...guarded });
@@ -1167,10 +1202,12 @@ export const valuateItem = createServerFn({ method: "POST" })
                 ...(hasLink ? {} : { confidence: "low" as const }),
               }
             : r;
-        const finished = withMissingInfo(flagged, itemId, data.lang);
-        return verifiedPrice && finished.confidence === "low"
-          ? { ...finished, confidence: "medium" }
-          : finished;
+        const evidenceBacked =
+          verifiedPrice && flagged.confidence === "low"
+            ? { ...flagged, confidence: "medium" as const }
+            : flagged;
+        // Apply critical missing-data confidence caps after any evidence-based upgrade.
+        return withMissingInfo(evidenceBacked, itemId, data.lang);
       };
       let forceRange = false;
       let lastErr: unknown = null;
@@ -1217,7 +1254,17 @@ export const valuateItem = createServerFn({ method: "POST" })
           }
 
           // Precio encontrado de verdad (anuncios o ventas verificados) manda sobre la estimación.
-          const anchored = anchorToComparables(parsed, citations, EUR_PER_USD_APPROX, data.lang, true);
+          const evidencePages = await scrapeComparableEvidence(
+            (parsed as { comparables?: unknown } | null)?.comparables,
+            citations,
+          );
+          const anchored = anchorToComparables(
+            parsed,
+            citations,
+            EUR_PER_USD_APPROX,
+            data.lang,
+            evidencePages,
+          );
           if (!anchored) parsed = applyBulkFloor(parsed);
 
           const result = ResultSchema.safeParse(parsed);

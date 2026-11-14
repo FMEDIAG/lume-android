@@ -132,6 +132,64 @@ export function retailRange(
 
 export type SearchPage = { url: string; title: string; markdown: string };
 
+/** Restrict cited-page fetches to ordinary public HTTPS hostnames. */
+export function isSafeCitationUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const ipv4 = host.split(".");
+  const isIpv4 = ipv4.length === 4 && ipv4.every((part) => {
+    const value = Number(part);
+    return part.length > 0 && Number.isInteger(value) && value >= 0 && value <= 255;
+  });
+  return parsed.protocol === "https:" &&
+    !parsed.username &&
+    !parsed.password &&
+    (!parsed.port || parsed.port === "443") &&
+    host.includes(".") &&
+    host !== "localhost" &&
+    !host.endsWith(".localhost") &&
+    !host.endsWith(".local") &&
+    !host.endsWith(".internal") &&
+    !isIpv4 &&
+    !host.startsWith("[");
+}
+
+/** Scrape a cited page through the existing gateway; never fetch model URLs directly. */
+export async function firecrawlScrape(url: string, signal: AbortSignal): Promise<SearchPage | null> {
+  if (!isSafeCitationUrl(url)) return null;
+  const lovableKey = process.env.LOVABLE_API_KEY;
+  const fcKey = process.env.FIRECRAWL_API_KEY;
+  if (!lovableKey || !fcKey) return null;
+  const res = await fetch(GATEWAY + "/scrape", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + lovableKey,
+      "X-Connection-Api-Key": fcKey,
+    },
+    body: JSON.stringify({ url, formats: ["markdown"], onlyMainContent: true, storeInCache: false }),
+    signal,
+  });
+  if (!res.ok) {
+    console.error("[citation] Firecrawl scrape failed [" + res.status + "]");
+    return null;
+  }
+  const json = (await res.json()) as {
+    data?: { markdown?: unknown; metadata?: { title?: unknown; statusCode?: unknown } };
+  };
+  const statusCode = Number(json.data?.metadata?.statusCode ?? 0);
+  if (statusCode >= 400) return null;
+  const markdown = typeof json.data?.markdown === "string" ? json.data.markdown.slice(0, 50_000) : "";
+  if (!markdown) return null;
+  return { url, title: String(json.data?.metadata?.title ?? "").slice(0, 200), markdown };
+}
+
+
 export async function firecrawlSearch(query: string, signal: AbortSignal): Promise<SearchPage[]> {
   const lovableKey = process.env.LOVABLE_API_KEY;
   const fcKey = process.env.FIRECRAWL_API_KEY;

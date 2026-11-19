@@ -2,7 +2,7 @@
 // Flujo: leer la referencia exacta → buscar con Firecrawl anuncios de tiendas → extraer
 // precios solo de páginas consultadas de verdad → calcular rango. Sin datos fiables, no hay cifra.
 
-const GATEWAY = "https://connector-gateway.lovable.dev/firecrawl/v2";
+const FIRECRAWL_API = "https://api.firecrawl.dev/v2";
 
 // Mercados de segunda mano, subastas y agregadores: no son precio de tienda.
 const SECOND_HAND_RE =

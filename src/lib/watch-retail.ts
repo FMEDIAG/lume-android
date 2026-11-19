@@ -2,8 +2,6 @@
 // Flujo: leer la referencia exacta → buscar con Firecrawl anuncios de tiendas → extraer
 // precios solo de páginas consultadas de verdad → calcular rango. Sin datos fiables, no hay cifra.
 
-const GATEWAY = "https://connector-gateway.lovable.dev/firecrawl/v2";
-
 // Mercados de segunda mano, subastas y agregadores: no son precio de tienda.
 const SECOND_HAND_RE =
   /(ebay\.|wallapop|vinted|milanuncios|catawiki|watchcharts|chrono24|subito\.|kleinanzeigen|leboncoin|todocoleccion|reddit\.|forum|youtube\.|instagram\.|facebook\.|pinterest\.|wikipedia\.|watchuseek|hodinkee\.com\/articles|bobswatches|crownandcaliber|watchfinder|liveauctioneers|invaluable|sothebys|christies|phillips\.com|bonhams|heritage)/i;
@@ -159,18 +157,16 @@ export function isSafeCitationUrl(url: string): boolean {
     !host.startsWith("[");
 }
 
-/** Scrape a cited page through the existing gateway; never fetch model URLs directly. */
+/** Scrape a cited page with Firecrawl directly; never fetch model URLs directly. */
 export async function firecrawlScrape(url: string, signal: AbortSignal): Promise<SearchPage | null> {
   if (!isSafeCitationUrl(url)) return null;
-  const lovableKey = process.env.LOVABLE_API_KEY;
-  const fcKey = process.env.FIRECRAWL_API_KEY;
-  if (!lovableKey || !fcKey) return null;
-  const res = await fetch(GATEWAY + "/scrape", {
+  const apiKey = process.env.FIRECRAWL_API_KEY;
+  if (!apiKey) return null;
+  const res = await fetch("https://api.firecrawl.dev/v2/scrape", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: "Bearer " + lovableKey,
-      "X-Connection-Api-Key": fcKey,
+      Authorization: "Bearer " + apiKey,
     },
     body: JSON.stringify({ url, formats: ["markdown"], onlyMainContent: true, storeInCache: false }),
     signal,
@@ -189,22 +185,19 @@ export async function firecrawlScrape(url: string, signal: AbortSignal): Promise
   return { url, title: String(json.data?.metadata?.title ?? "").slice(0, 200), markdown };
 }
 
-
 export async function firecrawlSearch(query: string, signal: AbortSignal): Promise<SearchPage[]> {
-  const lovableKey = process.env.LOVABLE_API_KEY;
-  const fcKey = process.env.FIRECRAWL_API_KEY;
-  if (!lovableKey || !fcKey) throw new Error("firecrawl not configured");
-  const res = await fetch(`${GATEWAY}/search`, {
+  const apiKey = process.env.FIRECRAWL_API_KEY;
+  if (!apiKey) throw new Error("firecrawl not configured");
+  const res = await fetch("https://api.firecrawl.dev/v2/search", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${lovableKey}`,
-      "X-Connection-Api-Key": fcKey,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       query,
       limit: 8,
-      scrapeOptions: { formats: ["markdown"], onlyMainContent: true },
+      scrapeOptions: { formats: [{ type: "markdown" }], onlyMainContent: true },
     }),
     signal,
   });

@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { setResponseStatus } from "@tanstack/react-start/server";
 import { z } from "zod";
-import { chatCompletion, isAllowedOrigin } from "@/lib/lume-ai";
+import { chatCompletion, hasAiProviderConfigured, isAllowedOrigin } from "@/lib/lume-ai";
 import { clientIp, requestOriginHost } from "@/lib/lume-ai";
 
 const MAX_PHOTO_CHARS = 1_500_000;
@@ -110,7 +110,7 @@ function normalizeOutput(raw: unknown) {
 export const detectCategory = createServerFn({ method: "POST" })
   .validator((data: unknown) => InputSchema.parse(data))
   .handler(async ({ data }) => {
-    if (!process.env.XAI_API_KEY && !process.env.LOVABLE_API_KEY && !process.env.GEMINI_API_KEY) {
+    if (!hasAiProviderConfigured()) {
       throw new Error("AI is not available in this environment");
     }
 

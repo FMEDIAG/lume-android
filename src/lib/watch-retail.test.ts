@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isPreOwnedSourceUrl,
   cleanWatchIdentification,
@@ -9,7 +9,14 @@ import {
   retailRange,
   trimNotes,
   isSafeCitationUrl,
+  firecrawlSearch,
+  firecrawlScrape,
 } from "./watch-retail";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 describe("watch retail", () => {
   it("only allows public HTTPS citation URLs for scraping", () => {
@@ -66,5 +73,45 @@ describe("watch retail", () => {
     expect(out.length).toBeLessThanOrEqual(120);
     expect(out.endsWith(".")).toBe(true);
     expect(trimNotes("Nota breve.", 120)).toBe("Nota breve.");
+  });
+});
+
+describe("Firecrawl API", () => {
+  it("uses Firecrawl v2 directly for search with its own key", async () => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-test-key");
+    vi.stubEnv("LOVABLE_API_KEY", "legacy-lovable-key");
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        success: true,
+        data: { web: [{ url: "https://shop.example/item", title: "Watch", markdown: "Price: 1000 EUR" }] },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pages = await firecrawlSearch("Rolex Submariner", new AbortController().signal);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://api.firecrawl.dev/v2/search");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(request.headers).get("Authorization")).toBe("Bearer firecrawl-test-key");
+    expect(new Headers(request.headers).has("X-Connection-Api-Key")).toBe(false);
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      query: "Rolex Submariner",
+      limit: 8,
+      scrapeOptions: { formats: [{ type: "markdown" }], onlyMainContent: true },
+    });
+    expect(pages).toEqual([{ url: "https://shop.example/item", title: "Watch", markdown: "Price: 1000 EUR" }]);
+  });
+
+  it("uses Firecrawl v2 directly to scrape cited pages", async () => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-test-key");
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ success: true, data: { markdown: "Price: 1000 EUR", metadata: { title: "Watch" } } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await firecrawlScrape("https://shop.example/item", new AbortController().signal);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://api.firecrawl.dev/v2/scrape");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(request.headers).get("Authorization")).toBe("Bearer firecrawl-test-key");
+    expect(page).toEqual({ url: "https://shop.example/item", title: "Watch", markdown: "Price: 1000 EUR" });
   });
 });

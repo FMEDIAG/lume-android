@@ -1,10 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tanstack/react-start/server", () => ({ getRequest: vi.fn() }));
-import { chatCompletion, raceForEvidence, type ChatResult } from "./lume-ai";
+import { chatCompletion, hasAiProviderConfigured, raceForEvidence, type ChatResult } from "./lume-ai";
 
 const grounded = (text: string): ChatResult => ({ text, citations: ["https://shop.example/" + text] });
 const later = <T,>(ms: number, value: T) => new Promise<T>((r) => setTimeout(() => r(value), ms));
+
+describe("AI provider configuration", () => {
+  it("recognizes Mistral as a configured provider", () => {
+    vi.stubEnv("XAI_API_KEY", "");
+    vi.stubEnv("MISTRAL_API_KEY", "configured");
+    vi.stubEnv("GEMINI_API_KEY", "");
+    expect(hasAiProviderConfigured()).toBe(true);
+  });
+
+  it("does not call Lovable when no supported AI provider is configured", async () => {
+    vi.stubEnv("XAI_API_KEY", "");
+    vi.stubEnv("MISTRAL_API_KEY", "");
+    vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubEnv("LOVABLE_API_KEY", "legacy-configured");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      chatCompletion({ messages: [{ role: "user", content: "Price" }] }),
+    ).rejects.toThrow("AI is not available in this environment");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
 
 describe("raceForEvidence", () => {
   it("starts the next search when the first one is slow and returns the first grounded reply", async () => {

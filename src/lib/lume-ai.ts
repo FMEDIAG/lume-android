@@ -62,6 +62,10 @@ export type ChatResult = {
   citations: string[];
 };
 
+export function hasAiProviderConfigured(): boolean {
+  return Boolean(process.env.XAI_API_KEY || process.env.MISTRAL_API_KEY || process.env.GEMINI_API_KEY);
+}
+
 async function parseChatJson(res: Response): Promise<ChatResult> {
   const json = (await res.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
@@ -175,7 +179,6 @@ export async function chatCompletion(opts: {
 }): Promise<ChatResult> {
   const timeoutMs = opts.timeoutMs ?? 45_000;
   const xaiKey = process.env.XAI_API_KEY;
-  const lovableKey = process.env.LOVABLE_API_KEY;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -211,8 +214,7 @@ export async function chatCompletion(opts: {
           lastErr = await res.text();
           console.error(`[lume-ai] xAI ${mode} [${res.status}]: ${lastErr.slice(0, 280)}`);
           // 401/403 = clave inválida; 402/429 = sin crédito o límite alcanzado.
-          // En cualquiera de estos casos no tiene sentido seguir insistiendo con xAI:
-          // salimos del bucle y probamos el gateway de Lovable como alternativa real.
+          // En estos casos dejamos xAI y probamos el siguiente proveedor configurado.
           if ([401, 402, 403, 429].includes(res.status)) break;
           if (!opts.search) break;
           if (![400, 410, 422, 404].includes(res.status)) break;
@@ -302,33 +304,8 @@ export async function chatCompletion(opts: {
       }
     }
     if (ungroundedFallback) return ungroundedFallback;
-    if (!lovableKey && (mistralError || geminiError)) {
+    if (mistralError || geminiError) {
       throw new Error([xaiError, mistralError, geminiError].filter(Boolean).join("; "));
-    }
-    // Si xAI no está configurada, o falló (clave inválida, sin crédito, error de red...),
-    // caemos de verdad al gateway de Lovable en vez de fallar toda la tasación.
-    if (lovableKey) {
-      const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Lovable-API-Key": lovableKey,
-        },
-        body: JSON.stringify({
-          model: "google/gemini-3.6-flash",
-          messages: opts.messages,
-          response_format: opts.json ? { type: "json_object" } : undefined,
-        }),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        console.error(`[lume-ai] Lovable error [${res.status}]: ${text.slice(0, 400)}`);
-        throw new Error(
-          [xaiError, mistralError, geminiError, `gateway ${res.status}`].filter(Boolean).join("; "),
-        );
-      }
-      return await parseChatJson(res);
     }
 
     throw new Error(xaiError ?? "AI is not available in this environment");
@@ -414,7 +391,7 @@ function toGeminiContents(messages: ChatMessage[]) {
   return { system: system.join("\n\n"), contents };
 }
 
-// Orden de proveedores: xAI (si hay clave) -> Mistral (si hay MISTRAL_API_KEY) -> Gemini -> Lovable.
+// Orden de proveedores: xAI (si hay clave) -> Mistral (si hay MISTRAL_API_KEY) -> Gemini.
 // Mistral hace la búsqueda web con su API de Conversaciones (ver mistralSearchCompletion). Pon esto
 // en true para que las peticiones que piden búsqueda web vayan primero a Gemini (y Mistral de respaldo).
 const USE_GEMINI_FOR_SEARCH = false;

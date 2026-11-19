@@ -133,15 +133,13 @@ export function retailRange(
 export type SearchPage = { url: string; title: string; markdown: string };
 
 export async function firecrawlSearch(query: string, signal: AbortSignal): Promise<SearchPage[]> {
-  const lovableKey = process.env.LOVABLE_API_KEY;
   const fcKey = process.env.FIRECRAWL_API_KEY;
-  if (!lovableKey || !fcKey) throw new Error("firecrawl not configured");
-  const res = await fetch(`${GATEWAY}/search`, {
+  if (!fcKey) throw new Error("firecrawl not configured");
+  const res = await fetch(`${FIRECRAWL_API}/search`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${lovableKey}`,
-      "X-Connection-Api-Key": fcKey,
+      Authorization: `Bearer ${fcKey}`,
     },
     body: JSON.stringify({
       query,

@@ -141,7 +141,7 @@ export const translations = {
     page: "Página",
     of: "de",
     intro: {
-      lead: "Desde un sello hasta un inmueble: obtén tasaciones instantáneas impulsadas por IA, combinando bases públicas mundiales, datos históricos, comparables reales y análisis automatizado.",
+      lead: "Desde monedas y billetes hasta cartas, vinilos y libros: obtén tasaciones instantáneas impulsadas por IA, combinando bases públicas mundiales, datos históricos, comparables reales y análisis automatizado.",
       featuresTitle: "Qué puedes hacer con Lume",
       features: [
         "Tasación universal: objetos pequeños (sellos, monedas, cartas, figuras) y bienes de alto valor (coches, relojes, inmuebles).",

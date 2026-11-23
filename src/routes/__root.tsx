@@ -89,14 +89,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       {
         name: "description",
         content:
-          "Lume tasa tus objetos por fotografía usando IA y bases de datos públicas como eBay y Wikipedia. Rangos en EUR y USD, ES/EN.",
+          "Lume tasa tus coleccionables por fotografía con IA y fuentes públicas: monedas, billetes, sellos, cartas, vinilos, libros y memorabilia. Rangos en EUR y USD, ES/EN.",
       },
       { name: "author", content: "Lume" },
       { property: "og:title", content: "Lume" },
       {
         property: "og:description",
         content:
-          "Lume tasa tus objetos por fotografía usando IA y bases de datos públicas como eBay y Wikipedia. Rangos en EUR y USD, ES/EN.",
+          "Lume tasa tus coleccionables por fotografía con IA y fuentes públicas: monedas, billetes, sellos, cartas, vinilos, libros y memorabilia. Rangos en EUR y USD, ES/EN.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
@@ -104,7 +104,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       {
         name: "twitter:description",
         content:
-          "Lume tasa tus objetos por fotografía usando IA y bases de datos públicas como eBay y Wikipedia. Rangos en EUR y USD, ES/EN.",
+          "Lume tasa tus coleccionables por fotografía con IA y fuentes públicas: monedas, billetes, sellos, cartas, vinilos, libros y memorabilia. Rangos en EUR y USD, ES/EN.",
       },
     ],
     links: [

@@ -449,7 +449,7 @@ function Index() {
                     onChange={(e) => setCategory(e.target.value)}
                     className="w-full rounded-xl border border-primary/20 bg-input px-3 py-2.5 text-sm text-foreground focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring/40"
                   >
-                    {(Object.keys(t.categories) as Array<keyof typeof t.categories>).map((k) => (
+                    {(Object.keys(t.categories) as Array<keyof typeof t.categories>).filter((k) => k !== "other").map((k) => (
                       <option key={k} value={k}>
                         {t.categories[k]}
                       </option>

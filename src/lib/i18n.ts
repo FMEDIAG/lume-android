@@ -7,7 +7,7 @@ export const translations = {
     homeHeading: "Lume",
     logoAlt: "Lume logo — Tasación de objetos",
     subtitle:
-      "Sube de 1 a 3 fotos de tu objeto y obtén una tasación estimada por fuentes públicas de todo el mundo.",
+      "Sube de 1 a 3 fotos de tu moneda, billete, sello, carta, vinilo, libro o memorabilia y obtén una tasación estimada con fuentes públicas.",
     takePhoto: "Cámara",
     macroPhoto: "Macro",
     fromGallery: "Galería",
@@ -176,7 +176,7 @@ export const translations = {
     homeHeading: "Lume",
     logoAlt: "Lume logo — Object appraisal",
     subtitle:
-      "Upload 1 to 3 photos of your item and get an estimated valuation using public sources from around the world.",
+      "Upload 1 to 3 photos of your coin, banknote, stamp, card, record, book or memorabilia and get an estimated valuation from public sources.",
     takePhoto: "Camera",
     macroPhoto: "Macro",
     fromGallery: "Gallery",

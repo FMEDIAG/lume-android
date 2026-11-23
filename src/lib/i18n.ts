@@ -17,7 +17,6 @@ export const translations = {
     minContext: "Añade contexto (marca, año, detalles...) para poder tasar",
     category: "Categoría",
     categories: {
-          categories: {
       auto: "Detectar automáticamente",
       coins: "Monedas y billetes",
       stamps: "Sellos",

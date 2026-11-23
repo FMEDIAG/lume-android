@@ -7,31 +7,12 @@ import { clientIp, requestOriginHost } from "@/lib/lume-ai";
 const MAX_PHOTO_CHARS = 1_500_000;
 
 const CATEGORY_KEYS = [
-  "art",
-  "cards",
   "coins",
   "stamps",
-  "watches",
-  "jewelry",
-  "electronics",
-  "books",
-  "music instrument",
-  "toys",
+  "cards",
   "vinyl",
-  "fashion",
-  "sports",
+  "books",
   "memorabilia",
-  "bonsai",
-  "wine",
-  "furniture",
-  "militaria",
-  "luxury bags",
-  "minerals",
-  "gemstones",
-  "vehicles",
-  "boats",
-  "realestate",
-  "other",
 ] as const;
 
 const InputSchema = z.object({

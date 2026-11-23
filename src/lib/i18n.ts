@@ -144,7 +144,7 @@ export const translations = {
       lead: "Desde monedas y billetes hasta cartas, vinilos y libros: obtén tasaciones instantáneas impulsadas por IA, combinando bases públicas mundiales, datos históricos, comparables reales y análisis automatizado.",
       featuresTitle: "Qué puedes hacer con Lume",
       features: [
-        "Tasación universal: objetos pequeños (sellos, monedas, cartas, figuras) y bienes de alto valor (coches, relojes, inmuebles).",
+        "Tasación de coleccionables: monedas, billetes, sellos, cartas, vinilos, libros y memorabilia.",
         "IA multimodal: analiza fotos, descripciones y contexto para generar una valoración estimada.",
         "Datos globales: catálogos, registros y comparables reales de fuentes públicas internacionales.",
         "Resultados en segundos, con rango de precio EUR/USD y nivel de confianza.",
@@ -310,10 +310,10 @@ export const translations = {
     page: "Page",
     of: "of",
     intro: {
-      lead: "From a stamp to a property: get instant appraisals powered by AI, combining global public databases, historical data, real comparables and automated analysis.",
+      lead: "From coins and banknotes to cards, records and books: get instant appraisals powered by AI, combining global public databases, historical data, real comparables and automated analysis.",
       featuresTitle: "What you can do with Lume",
       features: [
-        "Universal appraisal: small items (stamps, coins, cards, figures) and high-value assets (cars, watches, real estate).",
+        "Collectibles appraisal: coins, banknotes, stamps, cards, records, books and memorabilia.",
         "Multimodal AI: analyzes photos, descriptions and context to generate an estimated valuation.",
         "Global data: catalogs, records and real comparables from international public sources.",
         "Results in seconds, with a EUR/USD price range and a confidence level.",

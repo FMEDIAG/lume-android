@@ -154,7 +154,7 @@ export const translations = {
   },
   en: {
     appName: "Lume",
-    tagline: "Value your objects with AI",
+    tagline: "Value your collectibles with AI",
     homeHeading: "Lume",
     logoAlt: "Lume logo — Object appraisal",
     subtitle:

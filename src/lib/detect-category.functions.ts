@@ -88,6 +88,32 @@ function normalizeOutput(raw: unknown) {
   });
 }
 
+// Primera pregunta, de sí o no: ¿la foto es un coleccionable de nuestras categorías?
+async function isCollectible(dataUrl: string): Promise<boolean> {
+  const { text } = await chatCompletion({
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a strict filter. Answer with one word only: YES or NO. Answer YES only if the main object in the photo is a coin, banknote, stamp, trading card, vinyl record, book, comic, or memorabilia (autographs, film or music items). Answer NO for anything else, such as shoes, clothing, furniture, electronics, food, people, animals or landscapes.",
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Answer YES or NO." },
+          { type: "image_url", image_url: { url: dataUrl, detail: "low" } },
+        ],
+      },
+    ],
+    json: false,
+    search: false,
+    timeoutMs: 8_000,
+    maxTokens: 5,
+    preferFast: true,
+  });
+  return /^\s*YES/i.test(text);
+}
+
 export const detectCategory = createServerFn({ method: "POST" })
   .validator((data: unknown) => InputSchema.parse(data))
   .handler(async ({ data }) => {
@@ -106,10 +132,26 @@ export const detectCategory = createServerFn({ method: "POST" })
       throw new Error("Too many requests");
     }
 
+    // Filtro de sí o no: si la foto no es un coleccionable, no seguimos.
+    try {
+      const collectible = await isCollectible(data.dataUrl);
+      if (!collectible) throw new Error("Model returned no valid category");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === "Model returned no valid category") throw err;
+      if (/429|RESOURCE_EXHAUSTED/i.test(msg)) {
+        console.error("[detectCategory] AI quota exceeded:", msg);
+        setResponseStatus(429);
+        throw new Error("Detection quota exceeded");
+      }
+      // Otro fallo técnico en el filtro: seguimos con la clasificación normal.
+      console.error("[detectCategory] filter failed:", msg);
+    }
+
     const system =
       data.lang === "es"
-        ? `Eres un clasificador experto. Mira la foto y devuelve las 3 categorías más probables del objeto de esta lista EXACTA (usa la clave en inglés): coins, stamps, cards, vinyl, books, memorabilia. Usa "memorabilia" para autógrafos, objetos de cine, música o historia sin relación con el deporte, y "sports" solo para objetos deportivos (camisetas, balones, medallas, cartas de deportistas). Usa "bonsai" para árboles en maceta con estilo de bonsái. Usa "wine" para botellas de vino, cava, champán o licores. Usa "furniture" para muebles antiguos o de época. Usa "militaria" para objetos militares históricos (medallas, insignias, uniformes, cascos). Usa "luxury bags" para bolsos y complementos de marcas de lujo (no ropa general, que va en "fashion"). Usa "minerals" para especímenes de minerales o rocas en bruto sin tallar (cristales, geodas, fósiles). Usa "gemstones" para gemas o piedras preciosas sueltas ya talladas/pulidas pero sin montar en joya (si están montadas en un anillo, collar, etc., usa "jewelry"). Usa "coins" para monedas, billetes y piezas numismáticas encapsuladas (NGC/PCGS). Devuelve SOLO JSON: {"category":"<mejor_clave>","confidence":<0-100>,"candidates":[{"category":"<clave>","confidence":<0-100>}, ...3 elementos ordenados por confianza descendente]}. Las confidencias deben ser porcentajes enteros, sumar aproximadamente 100, NUNCA llegar a 100 (máximo 99, siempre queda margen de duda) y ninguna candidata puede superar el % de la categoría principal.`
-        : `You are an expert classifier. Look at the photo and return the top 3 most likely categories from this EXACT list (use the English key): coins, stamps, cards, vinyl, books, memorabilia. Use "memorabilia" for autographs, film, music or historical items unrelated to sports, and "sports" only for sports-specific items (jerseys, balls, medals, athlete trading cards). Use "bonsai" for potted trees styled as bonsai. Use "wine" for wine, champagne or spirits bottles. Use "furniture" for antique or period furniture. Use "militaria" for historic military items (medals, insignia, uniforms, helmets). Use "luxury bags" for luxury-brand bags and accessories (not general clothing, which goes in "fashion"). Use "minerals" for raw, uncut mineral or rock specimens (crystals, geodes, fossils). Use "gemstones" for cut/polished loose gems not mounted in a piece of jewelry (if mounted in a ring, necklace, etc., use "jewelry" instead). Use "coins" for coins, banknotes and slabbed numismatic pieces (NGC/PCGS). Return ONLY JSON: {"category":"<best_key>","confidence":<0-100>,"candidates":[{"category":"<key>","confidence":<0-100>}, ...3 items ordered by descending confidence]}. Confidences are integer percentages, should sum to roughly 100, must NEVER reach 100 (max 99, there is always some doubt) and no candidate may exceed the main category's percentage.`;
+        ? `Eres un clasificador experto. Mira la foto y devuelve las 3 categorías más probables del objeto de esta lista EXACTA (usa la clave en inglés): coins, stamps, cards, vinyl, books, memorabilia. Usa "coins" para monedas y billetes. Usa "memorabilia" para autógrafos, objetos de cine o música. Devuelve SOLO JSON: {"category":"<mejor_clave>","confidence":<0-100>,"candidates":[{"category":"<clave>","confidence":<0-100>}, ...3 elementos ordenados por confianza descendente]}. Las confidencias deben ser porcentajes enteros, sumar aproximadamente 100, NUNCA llegar a 100 (máximo 99, siempre queda margen de duda) y ninguna candidata puede superar el % de la categoría principal.`
+        : `You are an expert classifier. Look at the photo and return the top 3 most likely categories from this EXACT list (use the English key): coins, stamps, cards, vinyl, books, memorabilia. Use "coins" for coins and banknotes. Use "memorabilia" for autographs, film or music items. Return ONLY JSON: {"category":"<best_key>","confidence":<0-100>,"candidates":[{"category":"<key>","confidence":<0-100>}, ...3 items ordered by descending confidence]}. Confidences are integer percentages, should sum to roughly 100, must NEVER reach 100 (max 99, there is always some doubt) and no candidate may exceed the main category's percentage.`;
 
     // Un reintento ante fallos pasajeros; si es cuota, no insistimos.
     let text = "";

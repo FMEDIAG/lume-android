@@ -186,8 +186,8 @@ function Index() {
       .catch((e) => {
         if (detectedForRef.current !== latest.id) return;
         console.error(e);
-        setSuggested(null);
-        setSuggestedConfidence(null);
+        setSuggested("none");
+        setSuggestedConfidence(0);
         setCandidates([]);
         toast(
           lang === "es"

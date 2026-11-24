@@ -697,7 +697,7 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
   if (result.priceEurMax < result.priceEurMin) result.priceEurMax = result.priceEurMin;
   if (result.priceUsdMax < result.priceUsdMin) result.priceUsdMax = result.priceUsdMin;
 
-  const anchored = anchorToComparables(Object.assign(result, { comparables: price.comparables }), citations, spots?.eurPerUsd ?? EUR_PER_USD_APPROX, lang, true);
+  const anchored = anchorToComparables(Object.assign(result, { comparables: citations.length === 0 ? [] : price.comparables }), citations, spots?.eurPerUsd ?? EUR_PER_USD_APPROX, lang, true);
   // Los precios encontrados mandan sobre los suelos genéricos de una serie.
   const guarded = anchored ? result : applyCoinPriceGuards(result, { ...id, confidence: "low" }, spots);
   return ResultSchema.parse({ ...result, ...guarded });

@@ -213,8 +213,8 @@ function Index() {
       candidates,
     });
 
-  const canValuate = photos.length >= 1 && !loading && !categoryMismatch;
-
+  const lowConfidence = !!suggested && (suggestedConfidence ?? 0) < 50;
+  const canValuate = photos.length >= 1 && !loading && !categoryMismatch && !lowConfidence;
   async function onFiles(files: FileList | null) {
     if (!files) return;
     const newPhotos: Photo[] = [];

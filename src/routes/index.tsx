@@ -215,7 +215,9 @@ function Index() {
     });
 
   const lowConfidence = !!suggested && (suggestedConfidence ?? 0) < 50;
-  const canValuate = photos.length >= 1 && !loading && !categoryMismatch && !lowConfidence;
+  const hasCategory = category !== "auto" && category !== "other" && category !== "none";
+  const canValuate =
+    photos.length >= 1 && !loading && !detecting && !categoryMismatch && !lowConfidence && hasCategory;
   async function onFiles(files: FileList | null) {
     if (!files) return;
     const newPhotos: Photo[] = [];

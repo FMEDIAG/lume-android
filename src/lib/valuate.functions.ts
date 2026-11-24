@@ -690,7 +690,7 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
     priceUsdMin: roundMoney(price.marketUsdMin),
     priceUsdMax: roundMoney(price.marketUsdMax),
     confidence: id.isLikelyReproduction ? "low" : id.confidence,
-    notes: (price.notes + notesExtra).slice(0, 4000),
+    notes: citations.length === 0 ? (lang === "es" ? "Estimación orientativa: no se han podido consultar fuentes verificadas en esta búsqueda, así que no hay comparables confirmados." : "Indicative estimate: no verified sources could be checked in this search, so there are no confirmed comparables.") : (price.notes + notesExtra).slice(0, 4000),
     sources: uniqueSources,
   };
 

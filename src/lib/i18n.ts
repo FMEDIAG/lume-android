@@ -3,7 +3,7 @@ export type Lang = "es" | "en";
 export const translations = {
   es: {
     appName: "Lume",
-    tagline: "Tasa tus objetos con IA",
+    tagline: "Tasa tus coleccionables con IA",
     homeHeading: "Lume",
     logoAlt: "Lume logo — Tasación de objetos",
     subtitle:

@@ -522,6 +522,17 @@ function Index() {
                 </div>
               </div>
 
+              {lowConfidence && (
+  <div role="alert" className="mt-3 flex items-start gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2.5 text-xs leading-snug text-amber-200">
+    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+    <p>
+      {lang === "es"
+        ? "Esta foto no encaja con las categorías de Lume (monedas, billetes, sellos, cartas, vinilos, libros y memorabilia). Prueba con otra foto."
+        : "This photo doesn't match Lume's categories (coins, banknotes, stamps, cards, records, books and memorabilia). Please try another photo."}
+    </p>
+  </div>
+)}
+              
               {categoryMismatch && suggested && (
                 <div
                   role="alert"

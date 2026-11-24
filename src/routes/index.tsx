@@ -186,10 +186,11 @@ function Index() {
       .catch((e) => {
         if (detectedForRef.current !== latest.id) return;
         console.error(e);
-        setSuggested("none");
-        setSuggestedConfidence(0);
+        const noMatch = e instanceof Error && /no valid category|valid JSON/i.test(e.message);
+        setSuggested(noMatch ? "none" : null);
+        setSuggestedConfidence(noMatch ? 0 : null);
         setCandidates([]);
-        toast(
+     if (!noMatch) toast(
           lang === "es"
             ? "No se pudo detectar la categoría ahora: elígela a mano."
             : "Could not detect the category right now: please choose it manually.",

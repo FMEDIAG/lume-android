@@ -675,7 +675,15 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
     2,
   );
 
-  const siteInstructions = formatSiteSearchInstructions(buildSiteQueries([id.searchQuery], "coins", id.title), lang);
+  const coinPages = await fetchCoinPages([id.searchQuery, `${id.searchQuery} precio subasta`]);
+  const pagesText = coinPages
+    .map((p, i) => `[${i + 1}] ${p.title}\nURL: ${p.url}\n${p.markdown}`)
+    .join("\n\n---\n\n");
+  const siteInstructions =
+    formatSiteSearchInstructions(buildSiteQueries([id.searchQuery], "coins", id.title), lang) +
+    (pagesText
+      ? `\n\nPÁGINAS LEÍDAS CON FIRECRAWL (usa estas fuentes para comparables y cita sus URLs):\n${pagesText}`
+      : "");
   const comparableInstructions = lang === "es"
     ? '\nDevuelve también comparables: [{title, price, currency (EUR|USD), kind (sold|asking), url}]. Solo piezas de la misma denominación, año, ceca, grado y autenticidad; no inventes precios ni URLs. El contexto es opcional y se ignora si contradice la foto.'
     : '\nAlso return comparables: [{title, price, currency (EUR|USD), kind (sold|asking), url}]. Match denomination, year, mint, grade and authenticity; never invent prices or URLs. Context is optional and ignored when it contradicts the photo.';

@@ -574,7 +574,31 @@ Return ONLY JSON with: title, country, denomination, year, mint, seriesName, met
     : id;
 }
 
-async function priceCoin(
+// Busca en Firecrawl anuncios y subastas de la moneda y devuelve las páginas leídas.
+async function fetchCoinPages(
+  queries: string[],
+): Promise<Array<{ url: string; title: string; markdown: string }>> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15_000);
+  try {
+    const results = await Promise.allSettled(queries.map((q) => firecrawlSearch(q, ctrl.signal)));
+    const seen = new Set<string>();
+    const pages: Array<{ url: string; title: string; markdown: string }> = [];
+    for (const r of results) {
+      if (r.status !== "fulfilled") continue;
+      for (const p of r.value) {
+        if (!p.url || seen.has(p.url)) continue;
+        seen.add(p.url);
+        pages.push({ url: p.url, title: p.title, markdown: p.markdown.slice(0, 2500) });
+      }
+    }
+    return pages.slice(0, 8);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}async function priceCoin(
   data: z.infer<typeof InputSchema>,
   id: CoinId,
   spots: MetalSpots | null,

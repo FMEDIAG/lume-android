@@ -579,7 +579,7 @@ async function fetchCoinPages(
   queries: string[],
 ): Promise<Array<{ url: string; title: string; markdown: string }>> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 15_000);
+  const timer = setTimeout(() => ctrl.abort(), 40_000);
   try {
     const results = await Promise.allSettled(queries.map((q) => firecrawlSearch(q, ctrl.signal)));
     const seen = new Set<string>();

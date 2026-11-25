@@ -693,7 +693,7 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
       { role: "user", content: user },
     ],
     json: true,
-    search: true,
+    search: coinPages.length === 0,
     timeoutMs: 75_000,
     maxTokens: 1800,
   });
@@ -706,7 +706,7 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
   }
   const price = CoinPriceSchema.parse(parsed);
 
-  const sources = [...price.sources, ...citations.map((c) => c.slice(0, 200))].filter(Boolean);
+  const sources = [...price.sources, ...citations.map((c) => c.slice(0, 200)), ...coinPages.map((p) => p.url.slice(0, 200))].filter(Boolean);
   const uniqueSources = Array.from(new Set(sources)).slice(0, 8);
 
   const notesExtra =
@@ -722,14 +722,14 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
     priceUsdMin: roundMoney(price.marketUsdMin),
     priceUsdMax: roundMoney(price.marketUsdMax),
     confidence: id.isLikelyReproduction ? "low" : id.confidence,
-    notes: citations.length === 0 ? (lang === "es" ? "Estimación orientativa: no se han podido consultar fuentes verificadas en esta búsqueda, así que no hay comparables confirmados." : "Indicative estimate: no verified sources could be checked in this search, so there are no confirmed comparables.") : (price.notes + notesExtra).slice(0, 4000),
+    notes: citations.length === 0 && coinPages.length === 0 ? (lang === "es" ? "Estimación orientativa: no se han podido consultar fuentes verificadas en esta búsqueda, así que no hay comparables confirmados." : "Indicative estimate: no verified sources could be checked in this search, so there are no confirmed comparables.") : (price.notes + notesExtra).slice(0, 4000),
     sources: uniqueSources,
   };
 
   if (result.priceEurMax < result.priceEurMin) result.priceEurMax = result.priceEurMin;
   if (result.priceUsdMax < result.priceUsdMin) result.priceUsdMax = result.priceUsdMin;
 
-  const anchored = anchorToComparables(Object.assign(result, { comparables: citations.length === 0 ? [] : price.comparables }), citations, spots?.eurPerUsd ?? EUR_PER_USD_APPROX, lang, true);
+  const anchored = anchorToComparables(Object.assign(result, { comparables: citations.length === 0 && coinPages.length === 0 ? [] : price.comparables }), citations, spots?.eurPerUsd ?? EUR_PER_USD_APPROX, lang, true);
   // Los precios encontrados mandan sobre los suelos genéricos de una serie.
   const guarded = anchored ? result : applyCoinPriceGuards(result, { ...id, confidence: "low" }, spots);
   return ResultSchema.parse({ ...result, ...guarded });

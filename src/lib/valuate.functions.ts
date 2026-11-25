@@ -593,7 +593,8 @@ async function fetchCoinPages(
       }
     }
     return pages.slice(0, 8);
-  } catch {
+  } catch(err) {
+   console.error("[fetchCoinPages]", err instanceof Error ? err.message : String(err));
     return [];
   } finally {
     clearTimeout(timer);

@@ -1105,20 +1105,6 @@ export const valuateItem = createServerFn({ method: "POST" })
         }
       }
 
-      let watchHint: string | undefined;
-      let watchItemId: ItemId | undefined;
-      if (data.category === "watches") {
-        try {
-          const outcome = await valuateWatchRetail(data);
-          if (outcome.result) return outcome.result;
-          watchHint = outcome.hint;
-          watchItemId = outcome.itemId;
-        } catch (watchErr) {
-          console.error("[valuateItem] watch retail lookup failed, using general flow:", watchErr);
-          if (isQuotaError(watchErr)) throw watchErr;
-        }
-      }
-
       const categoryLine =
         data.category && data.category !== "auto"
           ? data.lang === "es"
@@ -1132,29 +1118,14 @@ export const valuateItem = createServerFn({ method: "POST" })
             : `\nUser-stated condition: ${data.condition} (adjust price accordingly)`
           : "";
 
-      // La cotización no depende de la identificación: se pide a la vez y se espera después.
-      const spotsPromise =
-        data.category === "jewelry" ? getMetalSpots() : Promise.resolve(null);
-
       let itemId: ItemId | null = null;
       try {
-        if (USE_IDENTIFICATION_PASS) itemId = watchItemId ?? (await identifyItem(data));
+        if (USE_IDENTIFICATION_PASS) itemId = await identifyItem(data);
       } catch (idErr) {
         console.error("[valuateItem] identification pass failed, continuing without it:", idErr);
         if (isQuotaError(idErr)) throw idErr;
       }
 
-      // Para joyería inyectamos también la cotización real del oro/plata, igual que
-      // en el flujo especializado de monedas: sin esto, la IA calcularía el valor de
-      // fundición de memoria (a menudo desactualizado) en vez de con el precio de hoy.
-      let metalSpotLine = "";
-      const metalSpots = await spotsPromise;
-      if (metalSpots) {
-        metalSpotLine =
-          data.lang === "es"
-            ? `\nCotización actual del metal (OBLIGATORIA, no inventes otra): oro ${roundMoney(metalSpots.goldUsd)} USD/oz troy (${roundMoney(metalSpots.goldEur)} EUR/oz), plata ${roundMoney(metalSpots.silverUsd)} USD/oz (${roundMoney(metalSpots.silverEur)} EUR/oz).`
-            : `\nCurrent metal spot (MANDATORY, do not invent another): gold ${roundMoney(metalSpots.goldUsd)} USD/troy oz (${roundMoney(metalSpots.goldEur)} EUR/oz), silver ${roundMoney(metalSpots.silverUsd)} USD/oz (${roundMoney(metalSpots.silverEur)} EUR/oz).`;
-      }
       const queriesTxt = itemId && itemId.searchQueries.length ? itemId.searchQueries.join(" | ") : "";
       const referenceCategory = data.category === "auto" || data.category === "other"
         ? itemId?.category ?? "other"
@@ -1163,11 +1134,6 @@ export const valuateItem = createServerFn({ method: "POST" })
         buildSiteQueries([...buildFichaQueries(itemId?.ficha), ...(itemId?.searchQueries ?? [])], referenceCategory, itemId?.summary || "objeto de la fotografía precio mercado"),
         data.lang,
       );
-      const watchStyleRules =
-        data.lang === "es"
-          ? '\nReglas de redacción para este reloj: en "identification" describe solo lo que se VE; no afirmes que la referencia es exacta si no está escrita en la foto o en el contexto (di "probable"), no indiques el estado, la caja ni los papeles, y no incluyas modelos alternativos. En "notes" escribe como máximo dos frases cortas: que no es precio de tienda nuevo y de dónde sale el rango; no repitas la identificación ni pidas datos al usuario.'
-          : '\nWriting rules for this watch: in "identification" describe only what is VISIBLE; do not claim the reference is exact unless it is written in the photo or the context (say "probable"), do not state condition, box or papers, and do not list alternative models. In "notes" write at most two short sentences: that it is not a new retail price and where the range comes from; do not repeat the identification or ask the user for data.';
-      const watchLine = watchHint ? `\n${watchHint}${watchStyleRules}` : "";
       const idLine =
         itemId && itemId.summary
           ? data.lang === "es"
@@ -1182,10 +1148,8 @@ export const valuateItem = createServerFn({ method: "POST" })
         (data.context || "(none)") +
         categoryLine +
         conditionLine +
-        metalSpotLine +
         idLine +
         siteInstructions +
-        watchLine +
         (data.lang === "es"
           ? '\nREGLA DE EVIDENCIA: sources contiene solo URLs de páginas realmente consultadas, nunca nombres de webs consultadas conceptualmente. Compara el mismo modelo, edición, material, estado y mercado; excluye lotes, accesorios, réplicas o variantes distintas. Wikipedia y catálogos descriptivos sirven para identificar, no prueban un precio. No inventes dimensiones, kilómetros, autenticidad ni procedencia; el contexto solo prevalece si es coherente. Esta regla prevalece sobre cualquier instrucción anterior contradictoria.'
           : '\nEVIDENCE RULE: sources contains only URLs of pages actually consulted, never conceptually consulted site names. Match model, edition, material, condition and market; exclude lots, accessories, replicas or different variants. Wikipedia and descriptive catalogues support identification, not price evidence. Do not invent dimensions, mileage, authenticity or provenance; context only overrides guesses when consistent. This rule overrides any conflicting earlier instruction.');
@@ -1197,23 +1161,7 @@ export const valuateItem = createServerFn({ method: "POST" })
 
       const finish = (r: ValuationResult, verifiedPrice: boolean): ValuationResult => {
         const hasLink = r.sources.some((s) => /^https?:\/\//i.test(s));
-        const flagged =
-          watchHint
-            ? {
-                ...r,
-                identification: cleanWatchIdentification(
-                  r.identification,
-                  !!itemId && itemId.ficha?.reference === "",
-                ),
-                // Si el propio sistema ya avisó de que no hay comparables verificados, no se repite.
-                notes: hasLink
-                  ? trimNotes(r.notes)
-                  : /^(Estimación orientativa|Indicative estimate)/i.test(r.notes.trim())
-                    ? trimNotes(r.notes, 380)
-                    : `${data.lang === "es" ? "Estimación sin fuentes verificadas." : "Estimate without verified sources."} ${trimNotes(r.notes, 380)}`.trim(),
-                ...(hasLink ? {} : { confidence: "low" as const }),
-              }
-            : r;
+        const flagged = r;
         const finished = withMissingInfo(flagged, itemId, data.lang);
         return verifiedPrice && finished.confidence === "low"
           ? { ...finished, confidence: "medium" }

@@ -17,7 +17,8 @@ const CATEGORY_KEYS = [
 
 const InputSchema = z.object({
   dataUrl: z.string().startsWith("data:image/").max(MAX_PHOTO_CHARS),
-  lang: z.enum  chosen: z.string().optional(),(["es", "en"]).default("es"),
+  lang: z.enum(["es", "en"]).default("es"),
+  chosen: z.string().optional(),
 });
 
 const CandidateSchema = z.object({

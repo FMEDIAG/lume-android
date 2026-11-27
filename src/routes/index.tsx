@@ -172,7 +172,7 @@ function Index() {
     setDetecting(true);
     makeThumbnail(latest.dataUrl)
       .catch(() => latest.dataUrl)
-      .then((thumb) => detect({ data: { dataUrl: thumb, lang } }))
+      .then((thumb) => detect({ data: { dataUrl: thumb, lang, chosen: category } }))
       .then((r) => {
         if (detectedForRef.current !== latest.id) return;
         setSuggested(r.category);

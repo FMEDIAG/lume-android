@@ -135,7 +135,7 @@ export const detectCategory = createServerFn({ method: "POST" })
 
     // Filtro de sí o no: si la foto no es un coleccionable, no seguimos.
     try {
-      const collectible = await isCollectible(data.dataUrl);
+      const collectible = data.chosen && data.chosen !== "auto" && data.chosen !== "other" ? true : await isCollectible(data.dataUrl);
       if (!collectible) throw new Error("Model returned no valid category");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

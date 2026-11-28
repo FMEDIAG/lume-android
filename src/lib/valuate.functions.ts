@@ -705,6 +705,21 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
   } catch {
     throw new Error("Coin pricing was not valid JSON");
   }
+  // Si la IA omite algún campo, se completa con 0 (el propio prompt usa 0 para "sin dato")
+  // en vez de romper toda la tasación. Nunca se inventan precios.
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const obj = parsed as Record<string, unknown>;
+    const inner = Object.keys(obj).length === 1 && typeof Object.values(obj)[0] === "object"
+      ? (Object.values(obj)[0] as Record<string, unknown>)
+      : obj;
+    for (const k of ["meltEur", "meltUsd", "marketEurMin", "marketEurMax", "marketUsdMin", "marketUsdMax"]) {
+      const v = Number(inner[k]);
+      inner[k] = Number.isFinite(v) && v >= 0 ? v : 0;
+    }
+    if (typeof inner.notes !== "string") inner.notes = "";
+    if (!Array.isArray(inner.sources)) inner.sources = [];
+    parsed = inner;
+  }
   const price = CoinPriceSchema.parse(parsed);
 
   const sources = [...price.sources, ...citations.map((c) => c.slice(0, 200)), ...coinPages.map((p) => p.url.slice(0, 200))].filter(Boolean);

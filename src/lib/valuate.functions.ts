@@ -716,6 +716,13 @@ Return ONLY JSON: meltEur, meltUsd, marketEurMin, marketEurMax, marketUsdMin, ma
       const v = Number(inner[k]);
       inner[k] = Number.isFinite(v) && v >= 0 ? v : 0;
     }
+    // Si falta el valor de fundición, se calcula con la fórmula del propio prompt:
+    // gramos de fino / 31,1035 × cotización del oro. Es un cálculo, no un precio inventado.
+    const fine = Number(id.estimatedFineWeightG);
+    if (spots && /oro|gold/i.test(String(id.metal)) && Number.isFinite(fine) && fine > 0) {
+      if (!(Number(inner.meltEur) > 0)) inner.meltEur = roundMoney((fine / 31.1035) * spots.goldEur);
+      if (!(Number(inner.meltUsd) > 0)) inner.meltUsd = roundMoney((fine / 31.1035) * spots.goldUsd);
+    }
     if (typeof inner.notes !== "string") inner.notes = "";
     if (!Array.isArray(inner.sources)) inner.sources = [];
     parsed = inner;
